@@ -12,6 +12,7 @@ import { useIsWide } from '../lib/viewport'
 import AccountIcon from './AccountIcon'
 import CopyAddress from './CopyAddress'
 import AccountDialog from './settings_account_form'
+import { Select, Combobox } from '../design-system/Select'
 
 type Section = 'accounts' | 'groups' | 'general'
 type Scope = Section | 'password'
@@ -452,13 +453,13 @@ export default function SettingsPage({
               </div>
               <div className="settings-toolbar">
                 <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
-                <select aria-label="按分组筛选" value={groupFilter} onChange={event => setGroupFilter(event.target.value)} disabled={groupsQuery.isError}><option value="all">所有分组</option><option value="ungrouped">未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
-                <select aria-label="按同步状态筛选" value={stateFilter} onChange={event => setStateFilter(event.target.value)}><option value="all">全部状态</option><option value="enabled">已启用同步</option><option value="disabled">已暂停同步</option><option value="invalid">认证失败</option><option value="unreachable">网络不可达</option><option value="degraded">网络异常·重试中</option><option value="syncing">同步中</option><option value="idle">空闲</option></select>
-                <select aria-label="按邮箱域名筛选" value={domainFilter} onChange={event => setDomainFilter(event.target.value)}><option value="all">所有域名</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}</select>
+                <Select ariaLabel="按分组筛选" value={groupFilter} onChange={setGroupFilter} disabled={groupsQuery.isError} options={[{ value: 'all', label: '所有分组' }, { value: 'ungrouped', label: '未分组' }, ...groups.map(group => ({ value: group.id, label: group.name }))]} />
+                <Select ariaLabel="按同步状态筛选" value={stateFilter} onChange={setStateFilter} options={[{ value: 'all', label: '全部状态' }, { value: 'enabled', label: '已启用同步' }, { value: 'disabled', label: '已暂停同步' }, { value: 'invalid', label: '认证失败' }, { value: 'unreachable', label: '网络不可达' }, { value: 'degraded', label: '网络异常·重试中' }, { value: 'syncing', label: '同步中' }, { value: 'idle', label: '空闲' }]} />
+                <Select ariaLabel="按邮箱域名筛选" value={domainFilter} onChange={setDomainFilter} options={[{ value: 'all', label: '所有域名' }, ...domains.map(domain => ({ value: domain, label: domain }))]} />
               </div>
             </div>
             {selectedAccounts.length > 0 && <div className="settings-bulk-bar" aria-label="批量账户操作">
-              <strong>已选 {selectedAccounts.length} 个账户</strong><select aria-label="批量移动分组" value={bulkGroup} onChange={event => setBulkGroup(event.target.value)} disabled={pendingAccounts || groupsQuery.isError}><option value="">移至未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+              <strong>已选 {selectedAccounts.length} 个账户</strong><Select ariaLabel="批量移动分组" value={bulkGroup} onChange={setBulkGroup} disabled={pendingAccounts || groupsQuery.isError} options={[{ value: '', label: '移至未分组' }, ...groups.map(group => ({ value: group.id, label: group.name }))]} />
               <button className="settings-button" type="button" disabled={pendingAccounts || groupsQuery.isError} onClick={() => void batch('move')}>移动分组</button>
               <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void syncSelectedNow()}><RefreshCw size={14} className={bulkSyncRunning ? 'spin' : ''} />立即同步</button>
               <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void batch('enable')}>启用同步</button>
@@ -481,10 +482,9 @@ export default function SettingsPage({
                     return next
                   })} />
                   <div className="settings-account-identity"><AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} /><div><strong title={account.email}><CopyAddress address={account.email} className="settings-copy-email">{account.email}</CopyAddress></strong><small>{providers[account.provider] || account.provider}{account.group_name ? ` · ${account.group_name}` : ''}</small></div></div>
-                  <select aria-label={`移动 ${account.email}`} value={account.group_id ?? ''} disabled={pendingAccounts || !groupsQuery.isSuccess} onChange={event => {
-                    const groupId = event.target.value
+                  <Select ariaLabel={`移动 ${account.email}`} value={account.group_id ?? ''} disabled={pendingAccounts || !groupsQuery.isSuccess} onChange={groupId => {
                     void run('accounts', '移动账号', async () => { await moveAccount(account, groupId); await refreshOrganization() }, '账号分组已更新')
-                  }}><option value="">不加入分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+                  }} options={[{ value: '', label: '不加入分组' }, ...groups.map(group => ({ value: group.id, label: group.name }))]} />
                   <span className={`settings-sync-status${healthIsError(accountHealth(account)) ? ' is-error' : ''}`}><i />{healthLabels[accountHealth(account)]}</span>
                   <button className="settings-switch" type="button" role="switch" aria-checked={account.sync_enabled !== false} aria-label={`${account.sync_enabled === false ? '启用' : '暂停'}同步 ${account.email}`} disabled={pendingAccounts} onClick={() => void toggleSyncPreference(account)}><span /></button>
                   <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pendingAccounts} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pendingAccounts || account.sync_enabled === false} onClick={() => void syncAccountNow(account)}><RefreshCw size={14} className={syncingAccountIds.has(account.id) ? 'spin' : ''} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pendingAccounts} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
@@ -618,7 +618,7 @@ export default function SettingsPage({
                 const timeoutPatch = patch.mail_fetch_timeout_seconds
                 if (timeoutPatch !== undefined && (!Number.isFinite(Number(timeoutPatch)) || Number(timeoutPatch) <= 0)) { report('general', '拉信超时必须为正数', true); return }
                 void run('general', '保存设置', async () => { await api.updateSettings(patch); await qc.invalidateQueries({ queryKey: queryKeys.settings }); setDraft({}) }, '设置已保存')
-              }}><fieldset disabled={pendingGeneral || !settingsQuery.isSuccess}><div className="settings-fields"><label className="settings-field" htmlFor="settings-timezone"><span>时区</span><input id="settings-timezone" list="settings-timezones" value={timezone} onChange={event => setDraft(current => ({ ...current, app_timezone: event.target.value }))} placeholder="Asia/Shanghai" /><small>使用 IANA 时区名称</small></label><datalist id="settings-timezones"><option value="Asia/Shanghai" /><option value="Asia/Tokyo" /><option value="America/New_York" /><option value="Europe/London" /><option value="UTC" /></datalist><label className="settings-field" htmlFor="settings-timeout"><span>拉信超时（秒）</span><input id="settings-timeout" type="number" step="any" value={timeoutSeconds} onChange={event => setDraft(current => ({ ...current, mail_fetch_timeout_seconds: event.target.value }))} placeholder="30" /><small>单次网络请求的等待上限（未设置时默认 30 秒）</small></label></div><button className="settings-button is-primary" type="submit">保存</button></fieldset></form><Status value={feedback.general} />
+              }}><fieldset disabled={pendingGeneral || !settingsQuery.isSuccess}><div className="settings-fields"><label className="settings-field" htmlFor="settings-timezone"><span>时区</span><Combobox id="settings-timezone" value={timezone} onChange={value => setDraft(current => ({ ...current, app_timezone: value }))} placeholder="Asia/Shanghai" options={['Asia/Shanghai', 'Asia/Tokyo', 'America/New_York', 'Europe/London', 'UTC'].map(value => ({ value, label: '' }))} /><small>使用 IANA 时区名称</small></label><label className="settings-field" htmlFor="settings-timeout"><span>拉信超时（秒）</span><input id="settings-timeout" type="number" step="any" value={timeoutSeconds} onChange={event => setDraft(current => ({ ...current, mail_fetch_timeout_seconds: event.target.value }))} placeholder="30" /><small>单次网络请求的等待上限（未设置时默认 30 秒）</small></label></div><button className="settings-button is-primary" type="submit">保存</button></fieldset></form><Status value={feedback.general} />
             </section>
             <section className="settings-card"><h2>登录安全</h2><p>修改应用登录密码，不会修改邮箱服务商密码。</p>
               <form data-ui="ST09" onSubmit={event => {

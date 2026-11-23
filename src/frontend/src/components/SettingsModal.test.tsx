@@ -5,7 +5,7 @@ import Sidebar from './Sidebar'
 import { __resetCsrfForTests, UNAUTHORIZED_EVENT } from '../api/client'
 import { queryClient, queryKeys } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
-import { changeSelect, cleanup, click, render, typeInto, waitFor } from '../test/render'
+import { changeSelect, cleanup, click, render, selectOptions, typeInto, waitFor } from '../test/render'
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -402,9 +402,9 @@ describe('<SettingsModal />', () => {
     await waitFor(() => expect(sidebar.querySelector('.tree-group-block[data-group-id="created-group"] .tree-group-heading')?.getAttribute('draggable')).toBe('true'))
 
     await click([...settings.querySelectorAll('button')].find(b => b.textContent === '账户管理') || null)
-    const moveSelect = settings.querySelector(`select[aria-label="移动 ${accountEmail}"]`) as HTMLSelectElement
+    const moveSelect = settings.querySelector(`[role="combobox"][aria-label="移动 ${accountEmail}"]`) as HTMLElement
     await changeSelect(moveSelect, 'created-group')
-    await waitFor(() => expect(moveSelect.value).toBe('created-group'))
+    await waitFor(() => expect(moveSelect.getAttribute('data-select-value')).toBe('created-group'))
     const disclosure = sidebar.querySelector('button[aria-label="展开分组 由设置创建"]')
     if (disclosure) await click(disclosure)
     await waitFor(() => expect(sidebar.querySelector(`.tree-account-block[data-drop-list="group:created-group"][data-account-id="${accountId}"]`)?.getAttribute('draggable')).toBe('true'))
@@ -855,11 +855,11 @@ describe('<SettingsModal />', () => {
     useMailStore.setState({ selectedKey: 'stale-message', selectedIds: ['stale-message'] })
 
     const { container } = await render(<SettingsPage />)
-    await waitFor(() => expect(container.querySelector('select[aria-label="移动 one@example.test"]')).not.toBeNull())
-    const groupSelect = container.querySelector('select[aria-label="移动 one@example.test"]') as HTMLSelectElement
+    await waitFor(() => expect(container.querySelector('[role="combobox"][aria-label="移动 one@example.test"]')).not.toBeNull())
+    const groupSelect = container.querySelector('[role="combobox"][aria-label="移动 one@example.test"]') as HTMLElement
     await changeSelect(groupSelect, 'group-two')
     await waitFor(() => expect(updateBodies[0]).toEqual({ group_id: 'group-two' }))
-    await waitFor(() => expect(groupSelect.value).toBe('group-two'))
+    await waitFor(() => expect(groupSelect.getAttribute('data-select-value')).toBe('group-two'))
     await changeSelect(groupSelect, '')
     await waitFor(() => expect(updateBodies[1]).toEqual({ clear_group: true }))
     expect(useMailStore.getState().selectedKey).toBeNull()
@@ -897,15 +897,15 @@ describe('<SettingsModal />', () => {
     expect(statusLabels.filter((label) => label === '认证失败')).toHaveLength(4)
     expect(statusLabels).toContain('空闲')
     expect(container.textContent).not.toContain('同步失败')
-    const domainSelect = container.querySelector('select[aria-label="按邮箱域名筛选"]') as HTMLSelectElement
-    expect([...domainSelect.options].map(option => option.value)).toEqual(['all', '163.com', 'gmail.com', 'qq.com'])
+    const domainSelect = container.querySelector('[role="combobox"][aria-label="按邮箱域名筛选"]') as HTMLElement
+    expect((await selectOptions(domainSelect)).map(option => option.value)).toEqual(['all', '163.com', 'gmail.com', 'qq.com'])
 
     await changeSelect(domainSelect, 'gmail.com')
     expect([...container.querySelectorAll('.settings-account-identity strong')].map(node => node.textContent)).toEqual(['ada@gmail.com'])
 
     await changeSelect(domainSelect, 'qq.com')
-    await changeSelect(container.querySelector('select[aria-label="按分组筛选"]'), 'work')
-    await changeSelect(container.querySelector('select[aria-label="按同步状态筛选"]'), 'invalid')
+    await changeSelect(container.querySelector('[role="combobox"][aria-label="按分组筛选"]'), 'work')
+    await changeSelect(container.querySelector('[role="combobox"][aria-label="按同步状态筛选"]'), 'invalid')
     await typeInto(container.querySelector('input[aria-label="搜索账户"]'), 'qq.com')
     expect([...container.querySelectorAll('.settings-account-identity strong')].map(node => node.textContent)).toEqual(['bob@qq.com', 'ellen@qq.com'])
 
@@ -986,7 +986,7 @@ describe('<SettingsModal />', () => {
     expect(dialog.querySelector('h2')?.textContent).toBe('编辑账户')
     expect((dialog.querySelector('#account-imap-host') as HTMLInputElement).value).toBe('imap.old.test')
     expect((dialog.querySelector('#account-imap-port') as HTMLInputElement).value).toBe('993')
-    expect((dialog.querySelector('#account-group') as HTMLSelectElement).value).toBe('work')
+    expect((dialog.querySelector('#account-group') as HTMLElement).getAttribute('data-select-value')).toBe('work')
 
     await typeInto(dialog.querySelector('#account-imap-host'), 'imap.new.test')
     await typeInto(dialog.querySelector('#account-imap-port'), '143')
@@ -1073,9 +1073,9 @@ describe('<SettingsModal />', () => {
       expect.arrayContaining(['添加账户', '立即同步']),
     )
     expect(firstRow?.querySelector('input[aria-label="搜索账户"]')).not.toBeNull()
-    expect(firstRow?.querySelector('select[aria-label="按分组筛选"]')).not.toBeNull()
-    expect(firstRow?.querySelector('select[aria-label="按同步状态筛选"]')).not.toBeNull()
-    expect(firstRow?.querySelector('select[aria-label="按邮箱域名筛选"]')).not.toBeNull()
+    expect(firstRow?.querySelector('[role="combobox"][aria-label="按分组筛选"]')).not.toBeNull()
+    expect(firstRow?.querySelector('[role="combobox"][aria-label="按同步状态筛选"]')).not.toBeNull()
+    expect(firstRow?.querySelector('[role="combobox"][aria-label="按邮箱域名筛选"]')).not.toBeNull()
 
     // The old footer bar (count text + bottom-right sync-all) is gone.
     expect(container.querySelector('.settings-list-footer')).toBeNull()

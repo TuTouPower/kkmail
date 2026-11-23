@@ -131,6 +131,13 @@
     - 编号一经分配具有长期稳定性，对应元素移除后编号废弃不复用；
     - 快捷键开启/关闭：Windows/Linux `Ctrl + Shift + .`，macOS `⌘ + Shift + .`；点击编号浮标复制结构化引用 `[UI:XXNN] 区域 · 描述`，不含运行时数据或凭据；`Esc` 仅退出引用模式并阻断级联关闭。
 
+## 六·一、 下拉控件规范（t085）
+
+1. 应用源码禁止原生 `<select>` / `<datalist>`；单选与建议输入统一使用 `src/frontend/src/design-system/Select.tsx` 的 `Select` / `Combobox` 原语。
+2. 弹出层必须由应用内 DOM 渲染，不接受 `appearance:none` 或只美化关闭态；表面、边框、圆角、选中高亮、悬停与焦点环仅引用 `--dropdown-*` 语义 token，双主题分别验证。
+3. 原语必须支持方向键导航、Enter 提交、Escape 关闭并恢复焦点、外部点击关闭、disabled 与无障碍名称；建议输入保留自由文本能力。
+4. `check_native_select.mjs` 作为静态门禁禁止新增原生控件，并经 `npm run css:check` 纳入 `test_cmd`。
+
 ## 七、 状态收敛与统计可见性规范
 
 0. **同步请求完成与失败文案**：

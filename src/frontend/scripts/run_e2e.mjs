@@ -7,7 +7,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const cli = resolve(root, 'node_modules/@playwright/test/cli.js')
 
 const args = process.argv.slice(2)
-const targets = args.length > 0 ? args : ['smoke.spec.ts', 'sidebar_tree.spec.ts', 'settings_workspace.spec.ts', 'reader_toolbar.spec.ts', 'mail_body_viewport.spec.ts']
+const targets = args.length > 0 ? args : ['smoke.spec.ts', 'sidebar_tree.spec.ts', 'settings_workspace.spec.ts', 'reader_toolbar.spec.ts', 'mail_body_viewport.spec.ts', 'dropdown_theming.spec.ts']
 
 const result = spawnSync(
   process.execPath,

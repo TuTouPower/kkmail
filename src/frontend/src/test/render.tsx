@@ -61,11 +61,31 @@ export async function typeInto(el: HTMLInputElement | null, value: string) {
   })
 }
 
-export async function changeSelect(el: HTMLSelectElement | null, value: string) {
-  if (!el) throw new Error('select not found')
-  await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
-    setter.call(el, value)
-    el.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+export async function changeSelect(el: Element | null, value: string) {
+  if (!el) throw new Error('select trigger not found')
+  if (el.getAttribute('aria-expanded') !== 'true') {
+    await act(async () => { (el as HTMLElement).click() })
+  }
+  const option = openOptions().find(node => node.getAttribute('data-option-value') === value)
+  if (!option) throw new Error(`select option not found: ${value}`)
+  await act(async () => { option.click() })
+}
+
+function openOptions(): HTMLElement[] {
+  const popovers = [...document.querySelectorAll('[data-select-open="true"]')]
+  const popover = popovers[popovers.length - 1]
+  return popover ? [...popover.querySelectorAll('[data-option-value]')] as HTMLElement[] : []
+}
+
+export async function selectOptions(el: Element | null): Promise<Array<{ value: string; label: string }>> {
+  if (!el) throw new Error('select trigger not found')
+  if (el.getAttribute('aria-expanded') !== 'true') {
+    await act(async () => { (el as HTMLElement).click() })
+  }
+  const options = openOptions().map(node => ({
+    value: node.getAttribute('data-option-value') ?? '',
+    label: node.textContent?.trim() ?? '',
+  }))
+  await act(async () => { (el as HTMLElement).click() })
+  return options
 }

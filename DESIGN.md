@@ -405,6 +405,13 @@ Borders are thin and low-contrast at rest, but must become more visible on hover
 - **Attachments:** show a compact attachment indicator in the list and a clear file name/type/size treatment in the reader.
 - **Empty state:** explain why no messages are shown and offer a relevant next action, such as clearing search or changing folders.
 
+### Select, dropdown, and suggestion input
+
+- **Shared primitive:** all single-choice dropdowns and suggestion inputs use the design-system `Select` / `Combobox` primitives. The popup is rendered as in-app DOM, not as a browser/OS native widget, so its surface, border, radius, selected state, and focus ring are identical across platforms and themes.
+- **Forbidden controls:** native `<select>` and `<datalist>` elements are not used in application source. A static gate rejects any new occurrence.
+- **Interaction contract:** Arrow Up/Down moves the active option, Enter commits, Escape closes and returns focus to the trigger, pointer-down outside closes, `disabled` is honored, and the trigger carries an accessible name. Suggestion inputs preserve free-text entry while offering themed options.
+- **Tokens:** popup surface `--dropdown-surface`, border `--dropdown-border`, radius `--dropdown-radius`, selected highlight `--dropdown-active`, hover/active row `--dropdown-hover`, focus ring `--dropdown-focus`, text `--dropdown-text`, secondary text `--dropdown-muted`. All resolve to existing semantic tokens in both themes; no hard-coded colors.
+
 ### Settings, dialogs, and feedback
 
 - **Settings panel:** categories for Account Management, Appearance, and General. Theme selection is available here only. Display the current theme and mark the selected option clearly.

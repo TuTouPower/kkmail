@@ -184,7 +184,7 @@ it.each([
     groups={[{ id: 'target-group', name: '新分组', account_count: 0, sort_order: 0 }]} groupsAvailable
     onClose={vi.fn()} onSaved={vi.fn(async () => {})} />)
   await waitFor(() => expect((container.querySelector('#account-redirect-uri') as HTMLInputElement).value).toContain('https://mail.example.test'))
-  expect((container.querySelector('#account-client-type') as HTMLSelectElement).value).toBe('public')
+  expect((container.querySelector('#account-client-type') as HTMLElement).getAttribute('data-select-value')).toBe('public')
   if (editType) {
     await changeSelect(container.querySelector('#account-client-type'), 'confidential')
     await typeInto(container.querySelector('#account-client-secret'), 'operator-secret')
