@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import socket
 import time
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -30,6 +29,11 @@ from mail_core.threading.rules import assign_thread_for_message
 # - test_cookie_secure_adaptive_forwarded_proto: Removed per A21 decision.
 #   Direct trust of raw X-Forwarded-Proto headers was removed to prevent forged header bypass.
 #   cookie_secure now only trusts explicit config or verified ASGI scheme. Replaced by test_cookie_secure_boundary in test_auth.py.
+# - test_ssrf_rejects_dns_answers_mixing_public_and_private_ips: Removed per t089 decision.
+#   Build-time DNS checks in validate_imap_host had a DNS TOCTOU window and conflicted with
+#   trusted-proxy tunneling; Pin-IP DNS validation at dial time now blocks mixed public/private
+#   answers before any TCP connect in mail_core.net.dial_stream. Replaced by
+#   test_direct_pin_ip_prevents_dns_rebinding_toctou_and_blocks_mixed_ips in test_net_outbound.py.
 
 
 def test_security_headers_middleware():
@@ -63,20 +67,6 @@ def test_ssrf_imap_host_validation(monkeypatch):
     # Allowed when env set
     monkeypatch.setenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "1")
     validate_imap_host("127.0.0.1")  # does not raise
-
-
-def test_ssrf_rejects_dns_answers_mixing_public_and_private_ips(monkeypatch):
-    monkeypatch.delenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", raising=False)
-    monkeypatch.setattr(
-        "mail_core.providers.host_security.socket.getaddrinfo",
-        lambda *_args, **_kwargs: [
-            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 993)),
-            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.8", 993)),
-        ],
-    )
-
-    with pytest.raises(ValueError, match="SSRF protection"):
-        validate_imap_host("mail.example.test")
 
 
 def test_threading_savepoint_conflict_retry():

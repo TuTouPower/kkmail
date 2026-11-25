@@ -22,6 +22,12 @@ from typing import Any, Callable, Iterator
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from mail_core.net.dialer import connect_ips_with_fallback, wrap_tls_socket
+from mail_core.net.policy import (
+    NetworkSecurityError,
+    allowed_cidrs_from_env,
+    is_safe_ip as _net_is_safe_ip,
+)
 from mail_core.security.auth import require_secret_key
 
 _REMOTE_IMAGE_SALT = "kkmail/remote-image-proxy/v1"
@@ -43,17 +49,6 @@ SUPPORTED_IMAGE_MIMES = frozenset({
     "image/webp",
     "image/svg+xml",
 })
-
-# Extra reserved networks to block for SSRF defense
-_EXTRA_BLOCKED_NETWORKS = (
-    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT
-    ipaddress.ip_network("198.18.0.0/15"),    # Benchmark tests
-    ipaddress.ip_network("192.0.0.0/24"),     # IETF Protocol Assignments
-    ipaddress.ip_network("192.0.2.0/24"),     # TEST-NET-1
-    ipaddress.ip_network("198.51.100.0/24"),  # TEST-NET-2
-    ipaddress.ip_network("203.0.113.0/24"),   # TEST-NET-3
-    ipaddress.ip_network("169.254.169.254/32"),  # Cloud metadata IP
-)
 
 _CSS_URL_RE = re.compile(r"""url\(\s*['"]?([^'")]+)['"]?\s*\)""", re.IGNORECASE)
 
@@ -78,7 +73,7 @@ _EXTERNAL_SVG_REF_RE = re.compile(
 )
 
 
-class SSRFSecurityError(ValueError):
+class SSRFSecurityError(NetworkSecurityError):
     """Raised when an address or URL violates SSRF safety rules."""
 
 
@@ -99,50 +94,9 @@ class RemoteImageFetchError(RuntimeError):
 
 
 
-def _get_allowed_cidrs() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-    env_val = os.environ.get("MAIL_CORE_PROXY_ALLOW_CIDRS", "").strip()
-    if not env_val:
-        return []
-    cidrs = []
-    for item in env_val.split(","):
-        raw = item.strip()
-        if raw:
-            try:
-                cidrs.append(ipaddress.ip_network(raw, strict=False))
-            except ValueError:
-                pass
-    return cidrs
-
-
 def is_safe_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True if an IP is a public, non-reserved, non-loopback, non-private IP."""
-    allowed_cidrs = _get_allowed_cidrs()
-    for cidr in allowed_cidrs:
-        if ip_obj in cidr:
-            return True
-
-    # Handle IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
-    if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
-        ip_obj = ip_obj.ipv4_mapped
-
-    if ip_obj.is_loopback:
-        return False
-    if ip_obj.is_private:
-        return False
-    if ip_obj.is_link_local:
-        return False
-    if ip_obj.is_multicast:
-        return False
-    if ip_obj.is_reserved:
-        return False
-    if ip_obj.is_unspecified:
-        return False
-
-    for net in _EXTRA_BLOCKED_NETWORKS:
-        if ip_obj.version == net.version and ip_obj in net:
-            return False
-
-    return True
+    return _net_is_safe_ip(ip_obj, allow_cidrs=allowed_cidrs_from_env())
 
 
 def validate_remote_url(raw_url: str) -> urllib.parse.SplitResult:
@@ -355,34 +309,25 @@ def _connect_with_fallback(
     timeout: float,
     connector: Callable[[tuple[str, int], float], Any] | None = None,
 ) -> Any:
-    """Connect to the first reachable safe IP within a shared total time budget.
+    """Connect direct-only to the first reachable safe IP within a shared budget.
 
-    IPv4 is preferred so a container without IPv6 egress does not waste the whole
-    budget on an unreachable address family. ``timeout`` is the total budget for
-    all attempts; each individual attempt is capped at CONNECT_TIMEOUT_SECONDS and
-    at the remaining budget.
+    Delegates Pin-IP IPv4-first dialing and error-priority preservation to
+    :func:`mail_core.net.dialer.connect_ips_with_fallback`. Remote image fetches
+    never use outbound HTTP/SOCKS proxies.
     """
-    connect = connector or (lambda address, seconds: socket.create_connection(address, timeout=seconds))
-    ordered = sorted(safe_ips, key=lambda ip: 1 if ":" in ip else 0)
-    deadline = time.monotonic() + timeout
-    saw_timeout = False
-    last_error: BaseException | None = None
-    for ip in ordered:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            saw_timeout = True
-            break
-        attempt_timeout = min(CONNECT_TIMEOUT_SECONDS, remaining)
-        try:
-            return connect((ip, port), attempt_timeout)
-        except TimeoutError as exc:
-            saw_timeout = True
-            last_error = exc
-        except OSError as exc:
-            last_error = exc
-    if saw_timeout:
-        raise RemoteImageTimeoutError("Connection timed out for all resolved addresses") from last_error
-    raise RemoteImageFetchError("All resolved addresses are unreachable") from last_error
+    try:
+        return connect_ips_with_fallback(
+            safe_ips,
+            port,
+            total_timeout=timeout,
+            per_attempt_timeout=CONNECT_TIMEOUT_SECONDS,
+            connector=connector,
+            clock=time.monotonic,
+        )
+    except TimeoutError as exc:
+        raise RemoteImageTimeoutError("Connection timed out for all resolved addresses") from exc
+    except OSError as exc:
+        raise RemoteImageFetchError("All resolved addresses are unreachable") from exc
 
 
 
@@ -433,11 +378,10 @@ def fetch_safe_remote_image(
                 raise SSRFSecurityError(f"SSRF blocked IP {ip_str} for host {host}")
             safe_ips.append(ip_str)
 
-        # 2. Connect to a validated IP (prevents DNS rebinding); fall back across
-        #    all resolved addresses because IPv6 may be unreachable in containers.
+        # 2. Direct-only Pin-IP connect (never proxied, prevents DNS rebinding).
+        deadline = time.monotonic() + TOTAL_CONNECT_TIMEOUT_SECONDS
         try:
             raw_sock = _connect_with_fallback(safe_ips, port, TOTAL_CONNECT_TIMEOUT_SECONDS)
-            raw_sock.settimeout(READ_TIMEOUT_SECONDS)
         except RemoteImageTimeoutError:
             raise
         except RemoteImageFetchError:
@@ -445,20 +389,25 @@ def fetch_safe_remote_image(
         except Exception as exc:
             raise RemoteImageFetchError("Connection failed") from exc
 
-        # 3. TLS handshake if HTTPS
+        # 3. Bounded TLS handshake preserving SNI, then apply READ_TIMEOUT_SECONDS.
         if scheme == "https":
             ssl_ctx = ssl.create_default_context()
             try:
-                conn_sock = ssl_ctx.wrap_socket(raw_sock, server_hostname=host)
+                conn_sock = wrap_tls_socket(
+                    raw_sock,
+                    server_hostname=host,
+                    ssl_context=ssl_ctx,
+                    deadline=deadline,
+                    clock=time.monotonic,
+                )
             except TimeoutError as exc:
-                raw_sock.close()
                 raise RemoteImageTimeoutError("TLS handshake timed out") from exc
             except Exception as exc:
-                raw_sock.close()
                 raise RemoteImageFetchError("TLS handshake failed") from exc
         else:
             conn_sock = raw_sock
 
+        conn_sock.settimeout(READ_TIMEOUT_SECONDS)
         conn = http.client.HTTPConnection(host, port, timeout=READ_TIMEOUT_SECONDS)
         conn.sock = conn_sock
 

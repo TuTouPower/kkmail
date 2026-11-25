@@ -53,7 +53,7 @@ def test_imap_connect_sends_id_command():
     mock_client.login.return_value = ("OK", [b"LOGIN completed"])
     mock_client._simple_command.return_value = ("OK", [b"ID completed"])
 
-    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+    with patch("mail_core.providers.imap.DialedIMAP4_SSL", return_value=mock_client):
         client = provider._connect()
 
     assert client is mock_client
@@ -90,7 +90,7 @@ def test_imap_connect_tolerates_missing_id_support():
     else:
         mock_client._simple_command.side_effect = imaplib.IMAP4.error("BAD command unknown: ID")
 
-    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+    with patch("mail_core.providers.imap.DialedIMAP4_SSL", return_value=mock_client):
         client = provider._connect()
 
     # Connection must succeed despite ID error
@@ -116,25 +116,12 @@ def test_imap_id_helper_prefers_public_method_when_available():
 def test_imap_id_command_is_registered_at_module_import():
     assert imaplib.Commands["ID"] == ("AUTH", "SELECTED")
 
-def test_imap_connect_rejects_private_peer_before_login(monkeypatch):
-    monkeypatch.delenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", raising=False)
-    provider = ImapProvider(
-        host="imap.example.com",
-        port=993,
-        username="user@example.com",
-        password="secretpassword",
-        use_ssl=True,
-    )
-    mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
-    mock_client.sock = Mock()
-    mock_client.sock.getpeername.return_value = ("10.0.0.8", 993)
 
-    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
-        with pytest.raises(ValueError, match="SSRF protection"):
-            provider._connect()
-
-    mock_client.login.assert_not_called()
-    mock_client.sock.close.assert_called_once()
+# Note (t089): test_imap_connect_rejects_private_peer_before_login was removed
+# because post-connect sock.getpeername() checking conflicted with private/loopback
+# outbound proxies and left a pre-check DNS TOCTOU window. Pin-IP SSRF checks now
+# block private targets before socket connect in mail_core.net.dial_stream
+# (see test_direct_pin_ip_prevents_dns_rebinding_toctou_and_blocks_mixed_ips).
 
 
 @pytest.mark.skipif(
@@ -189,7 +176,7 @@ def test_imap_connect_leaves_unclassified_login_errors_retryable(response):
     mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
     mock_client.login.side_effect = imaplib.IMAP4.error(response)
 
-    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+    with patch("mail_core.providers.imap.DialedIMAP4_SSL", return_value=mock_client):
         with pytest.raises(imaplib.IMAP4.error) as exc_info:
             provider._connect()
 
@@ -212,7 +199,7 @@ def test_imap_connect_expired_response_code_raises_permanent_auth_error():
     mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
     mock_client.login.side_effect = imaplib.IMAP4.error("[EXPIRED] passphrase is no longer valid")
 
-    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+    with patch("mail_core.providers.imap.DialedIMAP4_SSL", return_value=mock_client):
         with pytest.raises(PermanentAuthError, match="IMAP authentication rejected permanently"):
             provider._connect()
 
@@ -245,6 +232,6 @@ def test_imap_connect_confirmed_auth_failure_raises_permanent_auth_error(respons
     mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
     mock_client.login.side_effect = imaplib.IMAP4.error(response)
 
-    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+    with patch("mail_core.providers.imap.DialedIMAP4_SSL", return_value=mock_client):
         with pytest.raises(PermanentAuthError, match="IMAP authentication rejected permanently"):
             provider._connect()

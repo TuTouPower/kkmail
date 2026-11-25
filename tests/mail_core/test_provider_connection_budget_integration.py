@@ -64,7 +64,7 @@ class _CountingIMAP:
             cls.peer_ip = "8.8.8.8"
             cls.login_error = None
 
-    def __init__(self, host, port, timeout=None, ssl_context=None):
+    def __init__(self, host, port, timeout=None, ssl_context=None, **_kwargs):
         with self._lock:
             type(self).instances.append(self)
             type(self).live += 1
@@ -102,7 +102,7 @@ class _CountingIMAP:
 @pytest.fixture()
 def fake_imap(monkeypatch):
     _CountingIMAP.reset()
-    monkeypatch.setattr("mail_core.providers.imap.imaplib.IMAP4_SSL", _CountingIMAP)
+    monkeypatch.setattr("mail_core.providers.imap.DialedIMAP4_SSL", _CountingIMAP)
     return _CountingIMAP
 
 
@@ -170,8 +170,17 @@ def test_imap_auth_failure_releases_permit(factory, fake_imap):
     assert factory.snapshot()["current"] == 0  # permit released
 
 
-def test_imap_peer_verification_failure_releases_permit(factory, fake_imap):
-    fake_imap.peer_ip = "10.0.0.9"  # private peer: SSRF check must reject
+def test_imap_pin_ip_ssrf_failure_releases_permit(factory, monkeypatch):
+    import socket
+
+    # Note (t089): replaces old getpeername()-based peer check test. Pre-connect
+    # Pin-IP DNS validation now rejects 10.0.0.9 before any socket is created
+    # while still releasing the acquired connection permit cleanly.
+    monkeypatch.delenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", raising=False)
+    monkeypatch.setattr(
+        "mail_core.net.dialer.socket.getaddrinfo",
+        lambda *_a, **_kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.9", 993))],
+    )
     with pytest.raises(ValueError, match="private or loopback"):
         _imap_provider(factory).list_folders()
     assert factory.snapshot()["current"] == 0

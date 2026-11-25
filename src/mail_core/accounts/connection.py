@@ -1,6 +1,7 @@
 """Provider-specific account connection validation (no network login)."""
 from urllib.parse import urlsplit
 
+from mail_core.net.proxy import ProxyParseError, parse_proxy_url, validate_proxy_mode
 from mail_core.providers.host_security import (
     reject_microsoft_imap,
     validate_imap_host,
@@ -17,6 +18,38 @@ INTERNAL_TEST_PROVIDERS = frozenset({'memory', 'stub'})
 # Runtime cache keys the OAuth layer itself writes into stored credentials;
 # they are tolerated in a credential set but are not provider input fields.
 RUNTIME_CACHE_KEYS = frozenset({'access_token', 'expires_at'})
+
+
+_CLEARABLE_BLANK_CONFIG_KEYS = ("imap_user", "username", "outbound_proxy", "proxy_mode")
+
+
+def normalize_account_config(config: dict | None) -> dict:
+    """Return a shallow copy dropping None or whitespace-only clearable optional fields."""
+    if not isinstance(config, dict):
+        return {}
+    normalized = dict(config)
+    for key in _CLEARABLE_BLANK_CONFIG_KEYS:
+        if key in normalized and (normalized[key] is None or not str(normalized[key]).strip()):
+            normalized.pop(key, None)
+    return normalized
+
+
+def validate_outbound_proxy_config(config: dict) -> None:
+    """Validate optional account-level ``outbound_proxy`` and ``proxy_mode`` fields."""
+    if 'outbound_proxy' in config and config['outbound_proxy'] is not None:
+        raw_proxy = config['outbound_proxy']
+        if not isinstance(raw_proxy, str):
+            raise ValueError('config.outbound_proxy: must be a string')
+        if raw_proxy.strip():
+            try:
+                parse_proxy_url(raw_proxy)
+            except ProxyParseError as exc:
+                raise ValueError(f'config.outbound_proxy: {exc}') from exc
+    if 'proxy_mode' in config and config['proxy_mode'] is not None:
+        try:
+            validate_proxy_mode(config['proxy_mode'])
+        except ProxyParseError as exc:
+            raise ValueError(f'config.proxy_mode: {exc}') from exc
 
 
 def merge_credentials(
@@ -66,6 +99,7 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
     for key in ('imap_user', 'username'):
         if config.get(key) is not None and not isinstance(config.get(key), str):
             raise ValueError(f'config.{key}: must be a string')
+    validate_outbound_proxy_config(config)
     if provider == 'imap':
         for key in ('imap_host', 'host'):
             if config.get(key) is not None and not isinstance(config.get(key), str):

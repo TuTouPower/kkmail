@@ -23,6 +23,12 @@ class MailCoreConfig:
     allow_test_providers: bool = False
     forwarded_allow_ips: str | None = None
     proxy_headers: bool = False
+    outbound_proxy: str | None = None
+    no_proxy: str | None = None
+    outbound_connect_timeout_s: float = 10.0
+    outbound_per_attempt_timeout_s: float = 5.0
+    outbound_circuit_failure_threshold: int = 2
+    outbound_circuit_cooldown_s: float = 30.0
 
     # Database & Pool
     database_url: str = ""
@@ -75,6 +81,32 @@ class MailCoreConfig:
     login_max_failures: int = 10
     login_window_s: float = 300.0
     sse_max_connections: int = 128
+
+    def _validate_outbound_settings(self) -> None:
+        if self.outbound_proxy:
+            from mail_core.net.proxy import ProxyParseError, parse_proxy_url
+
+            try:
+                parse_proxy_url(self.outbound_proxy)
+            except ProxyParseError as exc:
+                raise ConfigError(f"invalid outbound_proxy: {exc}") from exc
+
+        for name, val in (
+            ("outbound_connect_timeout_s", self.outbound_connect_timeout_s),
+            ("outbound_per_attempt_timeout_s", self.outbound_per_attempt_timeout_s),
+        ):
+            if not math.isfinite(val) or val <= 0:
+                raise ConfigError(f"invalid {name}: {val} (must be finite > 0)")
+
+        if self.outbound_circuit_failure_threshold < 1:
+            raise ConfigError(
+                f"invalid outbound_circuit_failure_threshold: {self.outbound_circuit_failure_threshold} (must be >= 1)"
+            )
+
+        if not math.isfinite(self.outbound_circuit_cooldown_s) or self.outbound_circuit_cooldown_s < 0:
+            raise ConfigError(
+                f"invalid outbound_circuit_cooldown_s: {self.outbound_circuit_cooldown_s} (must be finite >= 0)"
+            )
 
     def validate(self) -> None:
         """Validate numeric ranges and logical constraints."""
@@ -154,3 +186,5 @@ class MailCoreConfig:
                 f"invalid folder_patrol_max_unprobed_s: {self.folder_patrol_max_unprobed_s} "
                 "(must be finite and >= folder_patrol_interval_s)"
             )
+
+        self._validate_outbound_settings()

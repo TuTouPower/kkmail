@@ -190,7 +190,7 @@ def test_archive_batch_reuses_imap_session_across_messages():
         mock_imap_client.select.return_value = ("OK", [b"10"])
         mock_imap_client.uid.return_value = ("OK", [(b"1", b"From: sender@example.com\r\nSubject: Hi\r\n\r\nBody")])
 
-        with patch("imaplib.IMAP4_SSL", return_value=mock_imap_client):
+        with patch("mail_core.providers.imap.DialedIMAP4_SSL", return_value=mock_imap_client):
             imap_provider = ImapProvider(
                 host="imap.example.com",
                 port=993,

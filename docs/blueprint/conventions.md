@@ -256,3 +256,10 @@ Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail
 4. **单信深色视图覆盖会话级内存隔离**：
     - 单信深色视图覆盖（`viewModeOverrides`）提升至应用全局内存 store（`mailStore`），按邮件 ID 字典管理，跨阅读器切信及设置页往返完整保留；
     - 排除在 `localStorage` 持久化之外，页面刷新重置为全局偏好；未单独覆盖的邮件遵循全局深色偏好。
+
+## 十三、 统一出站网络、代理与端点熔断约定 (t089)
+
+1. **统一建连与禁裸连约定**：所有邮件协议（`ImapProvider` 含 `open_idle_session`）、安全图片代理与 OAuth HTTP 传输策略须通过 `src/mail_core/net/` 统一解析出站代理与执行建连；禁止在协议适配器内部直接调用裸 `imaplib.IMAP4_SSL` 或 `socket.create_connection`，禁止使用建连后 `sock.getpeername()` 补丁充当 SSRF 门禁。
+2. **代理策略与零凭据泄漏**：代理配置按 `proxy_mode="direct"` → 账号 `outbound_proxy` → `NO_PROXY` / `MAIL_CORE_NO_PROXY` → `MAIL_CORE_OUTBOUND_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY` → `ALL_PROXY` 解析（含小写环境变体）；支持 `http`/`https`/`socks5`/`socks5h`，`ProxyConfig` 与异常/日志仅暴露脱敏 `safe_key()`，禁止包含代理账号口令；`remote_image_proxy.py` 强制直连禁代理，维持既有 SSRF 零外泄边界。
+3. **两段式超时与双栈错误保留**：建连与代理/TLS 握手全程受共享 `connect_timeout`（默认 10s，单尝试 5s）约束，完成后才切换为 `io_timeout`（默认 60s）；多 IP 解析强制 IPv4 优先尝试，禁止本地无 IPv6 路由触发的 `ENETUNREACH` 覆盖先前的远端 `TimeoutError` 或对端拒绝错误。
+4. **端点熔断与槽位隔离**：`EndpointBulkhead` 按 `(proxy_safe_key, host, port)` 对连续建连期传输失败开启有界冷却窗口与单探针半开恢复；开启期间在 `ConnectionPermit` 申请前快速失败或立即释放，认证拒绝对话不计入熔断计数。

@@ -36,8 +36,17 @@ from mail_core.providers.base import (
     RemoteMessageMeta,
     RemoteOperationResult,
 )
+from mail_core.net import (
+    DialedIMAP4,
+    DialedIMAP4_SSL,
+    EndpointBulkhead,
+    OutboundSecurityPolicy,
+    ProxyConfig,
+    default_bulkhead,
+    parse_proxy_url,
+    resolve_outbound_proxy,
+)
 from mail_core.providers.http import CursorInvalidError
-from mail_core.providers.host_security import validate_imap_peer_address
 from mail_core.security.redact import safe_error
 
 log = logging.getLogger("mail_core.providers.imap")
@@ -762,6 +771,9 @@ class _ImapFlagFetchError(RuntimeError):
     """A MODSEQ flag FETCH did not return a complete usable result."""
 
 
+_BULKHEAD_UNSET: Any = object()
+
+
 @dataclass
 class ImapProvider:
     host: str
@@ -770,6 +782,14 @@ class ImapProvider:
     password: str = field(repr=False)
     use_ssl: bool = True
     timeout: float = 60.0
+    connect_timeout: float | None = None
+    per_attempt_timeout: float | None = None
+    outbound_proxy: str | None = None
+    no_proxy: str | None = None
+    proxy_mode: str | None = None
+    security_policy: OutboundSecurityPolicy | None = None
+    bulkhead: Any = field(default=_BULKHEAD_UNSET, repr=False)
+    client_factory: Any = field(default=None, repr=False)
     # Connection-budget wiring (design §7): the permit is acquired before
     # the real connection is established and held for exactly the
     # connection's lifetime — a reused session counts as one connection.
@@ -784,14 +804,39 @@ class ImapProvider:
         default=None, init=False, repr=False
     )
 
-    def _connect_with_permit(self) -> tuple[Any, Any]:
-        """Acquire a permit first, then establish the real connection.
+    def _effective_bulkhead(self) -> EndpointBulkhead | None:
+        if self.bulkhead is _BULKHEAD_UNSET:
+            return default_bulkhead()
+        return self.bulkhead
 
-        Auth failure, peer-verification failure, or any other connect
-        error releases the permit before propagating.  A control-plane
-        failure raises before any provider I/O is attempted.
+    def _resolved_proxy(self) -> ProxyConfig | None:
+        return resolve_outbound_proxy(
+            self.host,
+            int(self.port),
+            explicit_proxy=self.outbound_proxy,
+            explicit_no_proxy=self.no_proxy,
+            proxy_mode=self.proxy_mode,
+            protocol="imap",
+        )
+
+    def _connect_with_permit(self) -> tuple[Any, Any]:
+        """Fast-fail if circuit open, acquire a permit, then establish the connection.
+
+        Auth failure, SSRF violation, or connect errors release the permit
+        before propagating.  A control-plane failure raises before any
+        provider I/O is attempted.
         """
         from mail_core.providers.connection_slots import acquire_permit
+
+        proxy_cfg = self._resolved_proxy()
+        bh = self._effective_bulkhead()
+        if bh is not None:
+            endpoint_key = (
+                proxy_cfg.safe_key() if proxy_cfg is not None else "direct",
+                self.host.strip().lower(),
+                int(self.port),
+            )
+            bh.raise_if_open(endpoint_key)
 
         permit = acquire_permit(self.permit_factory, self.traffic_class)
         try:
@@ -836,32 +881,67 @@ class ImapProvider:
             self._close_client(client, permit)
 
     def __repr__(self) -> str:
-        # Never leak IMAP password via logging / traceback repr.
+        # Never leak IMAP password or proxy credentials via logging / traceback repr.
+        proxy_summary: str | None = None
+        if self.outbound_proxy:
+            try:
+                proxy_summary = parse_proxy_url(self.outbound_proxy).safe_key()
+            except Exception:
+                proxy_summary = "<invalid>"
         return (
             f"ImapProvider(host={self.host!r}, port={self.port}, "
             f"username={self.username!r}, password=***, use_ssl={self.use_ssl}, "
-            f"timeout={self.timeout})"
+            f"timeout={self.timeout}, proxy={proxy_summary!r}, proxy_mode={self.proxy_mode!r})"
         )
 
-    def _connect(self) -> imaplib.IMAP4:
-        timeout = float(self.timeout)
+    def _open_client(self, io_timeout: float) -> imaplib.IMAP4:
+        proxy_cfg = self._resolved_proxy()
+        bh = self._effective_bulkhead()
+        if self.client_factory is not None:
+            if self.use_ssl:
+                return self.client_factory(
+                    self.host, self.port, ssl_context=ssl.create_default_context(), timeout=io_timeout
+                )
+            return self.client_factory(self.host, self.port, timeout=io_timeout)
+        common_kwargs = {
+            "timeout": io_timeout,
+            "connect_timeout": self.connect_timeout,
+            "per_attempt_timeout": self.per_attempt_timeout,
+            "proxy": proxy_cfg,
+            "security_policy": self.security_policy,
+            "bulkhead": bh,
+        }
         if self.use_ssl:
-            ssl_context = ssl.create_default_context()
-            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(
-                self.host, self.port, ssl_context=ssl_context, timeout=timeout
+            return DialedIMAP4_SSL(
+                self.host, self.port, ssl_context=ssl.create_default_context(), **common_kwargs
             )
-        else:
-            client = imaplib.IMAP4(self.host, self.port, timeout=timeout)
+        return DialedIMAP4(self.host, self.port, **common_kwargs)
+
+    @staticmethod
+    def _raise_if_permanent_auth_rejection(exc: imaplib.IMAP4.error) -> None:
+        msg = str(exc)
+        response_code = re.search(r"\[([A-Z0-9-]+)(?:\s|\])", msg, re.IGNORECASE)
+        code = response_code.group(1).upper() if response_code else ""
+        upper_msg = msg.upper()
+        # Exclude temporary lockouts ("too many login attempts", rate limiting)
+        # so transient provider lockouts stay retryable.
+        temporary_lockout = any(
+            marker in upper_msg
+            for marker in ("TOO MANY LOGIN", "TEMPORARILY", "LOCKED", "TRY AGAIN", "RATE LIMIT")
+        )
+        permanently_rejected = (
+            code in ("EXPIRED", "AUTHENTICATIONFAILED", "AUTHORIZATIONFAILED")
+            or "AUTHENTICATIONFAILED" in upper_msg
+            or "INVALID CREDENTIALS" in upper_msg
+        ) and not temporary_lockout
+        if permanently_rejected:
+            from mail_core.providers.http import PermanentAuthError
+
+            raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc
+
+    def _connect(self) -> imaplib.IMAP4:
+        client = self._open_client(float(self.timeout))
         sock = getattr(client, "sock", None)
-        try:
-            validate_imap_peer_address(sock.getpeername()[0])
-        except Exception:
-            if sock is not None:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-            raise
         try:
             try:
                 client.login(self.username, self.password)
@@ -871,32 +951,7 @@ class ImapProvider:
                 except Exception:
                     pass
             except imaplib.IMAP4.error as exc:
-                msg = str(exc)
-                response_code = re.search(r"\[([A-Z0-9-]+)(?:\s|\])", msg, re.IGNORECASE)
-                code = response_code.group(1).upper() if response_code else ""
-                upper_msg = msg.upper()
-                # A confirmed credential rejection must be surfaced as
-                # PermanentAuthError so the Worker can invalidate the account.
-                # RFC 5530 EXPIRED, AUTHENTICATIONFAILED / AUTHORIZATIONFAILED
-                # and explicit "invalid credentials" mean the stored secret is
-                # wrong.  Provider-side temporary lockouts ("too many login
-                # attempts", rate limiting) are deliberately excluded: they
-                # must stay retryable rather than disabling the account.
-                temporary_lockout = any(
-                    marker in upper_msg
-                    for marker in ("TOO MANY LOGIN", "TEMPORARILY", "LOCKED", "TRY AGAIN", "RATE LIMIT")
-                )
-                permanently_rejected = (
-                    code in ("EXPIRED", "AUTHENTICATIONFAILED", "AUTHORIZATIONFAILED")
-                    or "AUTHENTICATIONFAILED" in upper_msg
-                    or "INVALID CREDENTIALS" in upper_msg
-                ) and not temporary_lockout
-                if permanently_rejected:
-                    from mail_core.providers.http import PermanentAuthError
-
-                    raise PermanentAuthError(
-                        f"IMAP authentication rejected permanently: {msg}"
-                    ) from exc
+                self._raise_if_permanent_auth_rejection(exc)
                 raise
         except BaseException:
             # A117: any login-phase failure (OSError/SSLError/timeout, not

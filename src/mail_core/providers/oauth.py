@@ -36,6 +36,9 @@ from mail_core.security.credentials import (
     load_json_secret,
     credential_edit,
 )
+from mail_core.net.bulkhead import EndpointCircuitOpenError
+from mail_core.net.http_client import urlopen_outbound
+from mail_core.net.policy import NetworkSecurityError
 from mail_core.providers.http import AmbiguousOutcomeError, CursorInvalidError, ProviderHttpError, RateLimitedError
 
 log = logging.getLogger("mail_core.providers.oauth")
@@ -122,6 +125,10 @@ class OAuthTokenClient:
     # is opened by the caller — permits are never nested.
     permit_factory: Any = None
     traffic_class: Any = "foreground"
+    connect_timeout: float | None = None
+    outbound_proxy: str | None = None
+    no_proxy: str | None = None
+    proxy_mode: str | None = None
     _cached: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def _load(self) -> dict[str, Any]:
@@ -194,7 +201,17 @@ class OAuthTokenClient:
             if self.http_post is not None:
                 post = self.http_post
             else:
-                post = lambda m, u, f, h=None: default_urllib_token_post(m, u, f, h, timeout=self.timeout)
+                post = lambda m, u, f, h=None: default_urllib_token_post(
+                    m,
+                    u,
+                    f,
+                    h,
+                    timeout=self.timeout,
+                    connect_timeout=self.connect_timeout,
+                    outbound_proxy=self.outbound_proxy,
+                    no_proxy=self.no_proxy,
+                    proxy_mode=self.proxy_mode,
+                )
             # Phase 2 (unlocked): network refresh.
             try:
                 # Acquire + complete + release the refresh permit inside
@@ -261,6 +278,24 @@ class OAuthTokenClient:
             return str(access)
 
 
+def _extract_retry_after_seconds(headers: dict[str, str], *, default_delay: float) -> float:
+    raw_val = headers.get("Retry-After") or headers.get("retry-after")
+    if not raw_val:
+        return default_delay
+    try:
+        parsed = float(raw_val)
+    except (ValueError, TypeError):
+        return default_delay
+    return min(parsed, 10.0) if parsed > 0 else default_delay
+
+
+def _unwrap_circuit_open(exc: BaseException) -> EndpointCircuitOpenError | None:
+    if isinstance(exc, EndpointCircuitOpenError):
+        return exc
+    reason = getattr(exc, "reason", None)
+    return reason if isinstance(reason, EndpointCircuitOpenError) else None
+
+
 def default_urllib_token_post(
     method: str,
     url: str,
@@ -268,6 +303,10 @@ def default_urllib_token_post(
     headers: dict[str, str] | None = None,
     *,
     timeout: float = 30.0,
+    connect_timeout: float | None = None,
+    outbound_proxy: str | None = None,
+    no_proxy: str | None = None,
+    proxy_mode: str | None = None,
     permit_factory: Any = None,
     traffic_class: Any = "foreground",
     _sleep_fn: Any = None,
@@ -300,39 +339,41 @@ def default_urllib_token_post(
             req.add_header(k, v)
         try:
             with permit_scope(permit_factory, traffic_class):
-                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
+                urlopen_kwargs: dict[str, Any] = {
+                    "timeout": timeout,
+                    "explicit_proxy": outbound_proxy,
+                    "explicit_no_proxy": no_proxy,
+                    "proxy_mode": proxy_mode,
+                }
+                if connect_timeout is not None:
+                    urlopen_kwargs["connect_timeout"] = connect_timeout
+                with urlopen_outbound(req, **urlopen_kwargs) as resp:
                     raw_token_body = _read_response_limited(resp, MAX_JSON_RESPONSE_BYTES)
                     try:
                         return json.loads(raw_token_body.decode("utf-8"))
                     except (json.JSONDecodeError, UnicodeDecodeError) as decode_exc:
-                        # A291 (same family): never leak a bare decode error
-                        # from a 2xx token response.
                         raise ProviderHttpError(
                             f"token endpoint returned invalid JSON: {decode_exc}",
                             status=None,
                         ) from decode_exc
+        except NetworkSecurityError as exc:
+            raise ProviderHttpError(f"security policy blocked token request: {exc}", status=None) from exc
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
             hdrs = dict(exc.headers or {})
             if exc.code == 429:
-                raise RateLimitedError(
-                    raw or str(exc), status=429, body=raw, headers=hdrs
-                ) from exc
+                raise RateLimitedError(raw or str(exc), status=429, body=raw, headers=hdrs) from exc
             if exc.code in (503, 504) and attempt <= max_retries:
-                delay = attempt * 1.0
-                retry_after = hdrs.get("Retry-After") or hdrs.get("retry-after")
-                if retry_after:
-                    try:
-                        ra = float(retry_after)
-                        if ra > 0:
-                            delay = min(ra, 10.0)
-                    except (ValueError, TypeError):
-                        pass
-                sleep(delay)
+                sleep(_extract_retry_after_seconds(hdrs, default_delay=attempt * 1.0))
                 continue
             raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=hdrs) from exc
         except urllib.error.URLError as exc:
+            circuit_exc = _unwrap_circuit_open(exc)
+            if circuit_exc is not None:
+                raise circuit_exc from exc
             raise ProviderHttpError(f"token transport error: {exc.reason}", status=None) from exc
+        except EndpointCircuitOpenError:
+            raise
     raise AssertionError("unreachable: token POST retry loop fell through")  # pragma: no cover
 
 
@@ -404,6 +445,104 @@ def _url_is_sync_cursor_endpoint(url: str) -> bool:
     return False
 
 
+def _build_json_request(
+    method_upper: str,
+    url: str,
+    params: dict[str, Any] | None,
+    headers: dict[str, str] | None,
+) -> Any:
+    import json
+    import urllib.parse
+    import urllib.request
+
+    target_url = url
+    data: bytes | None = None
+    if params:
+        if method_upper == "GET":
+            q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
+            target_url = f"{url}?{q}" if q else url
+        else:
+            data = json.dumps(params).encode("utf-8")
+    req = urllib.request.Request(target_url, data=data, method=method_upper)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    if data is not None and method_upper != "GET":
+        req.add_header("Content-Type", "application/json")
+    return req
+
+
+def _parse_json_response(resp: Any, url: str, method_upper: str, retryable: bool) -> Any:
+    import json
+
+    ctype = resp.headers.get("Content-Type", "") if resp.headers else ""
+    is_mime = "$value" in url.lower() or "application/json" not in ctype
+    raw = _read_response_limited(resp, MAX_MIME_RESPONSE_BYTES if is_mime else MAX_JSON_RESPONSE_BYTES)
+    if not raw:
+        return {}
+    if "application/json" not in ctype and raw[:1] not in (b"{", b"["):
+        return {"raw_bytes": raw}
+    if len(raw) > MAX_JSON_RESPONSE_BYTES:
+        raise ProviderHttpError(
+            f"provider JSON response exceeds the {MAX_JSON_RESPONSE_BYTES}-byte size limit",
+            status=None,
+        )
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as decode_exc:
+        if retryable:
+            raise ProviderHttpError(
+                f"provider returned invalid JSON for {method_upper}: {decode_exc}",
+                status=None,
+            ) from decode_exc
+        raise AmbiguousOutcomeError(
+            f"{method_upper} outcome ambiguous: provider returned invalid JSON ({decode_exc})"
+        ) from decode_exc
+
+
+def _retry_delay_for_http_outcome(
+    code: int,
+    body: str,
+    hdrs: dict[str, str],
+    url: str,
+    method_upper: str,
+    retryable: bool,
+    attempt: int,
+    max_retries: int,
+    exc: BaseException,
+) -> float:
+    if code == 429:
+        raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
+    if code in (404, 410) and _url_is_sync_cursor_endpoint(url):
+        raise CursorInvalidError(body or str(exc), status=code, body=body, headers=hdrs) from exc
+    if code >= 500 and not retryable:
+        raise AmbiguousOutcomeError(f"{method_upper} outcome ambiguous after HTTP {code}") from exc
+    if code in (503, 504) and retryable and attempt <= max_retries:
+        return _extract_retry_after_seconds(hdrs, default_delay=attempt * 1.0)
+    raise ProviderHttpError(body or str(exc), status=code, body=body, headers=hdrs) from exc
+
+
+def _retry_delay_for_transport_error(
+    exc: BaseException,
+    method_upper: str,
+    retryable: bool,
+    attempt: int,
+    max_retries: int,
+) -> float:
+    circuit_exc = _unwrap_circuit_open(exc)
+    if circuit_exc is not None:
+        raise circuit_exc from exc
+    reason = getattr(exc, "reason", str(exc))
+    if "certificate_verify_failed" in str(reason).lower():
+        raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
+    if not retryable:
+        raise AmbiguousOutcomeError(
+            f"{method_upper} outcome ambiguous after transport error ({type(exc).__name__})"
+        ) from exc
+    if attempt <= max_retries:
+        return min(attempt * 1.0, 10.0)
+    raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
+
+
 def urllib_json_request(
     method: str,
     url: str,
@@ -411,31 +550,19 @@ def urllib_json_request(
     headers: dict[str, str] | None = None,
     *,
     timeout: float = 60.0,
+    connect_timeout: float | None = None,
+    outbound_proxy: str | None = None,
+    no_proxy: str | None = None,
+    proxy_mode: str | None = None,
     _sleep_fn: Any = None,
     permit_factory: Any = None,
     traffic_class: Any = "foreground",
 ) -> Any:
-    """Generic JSON HTTP for Graph API calls (stdlib).
-
-    Maps 404/410 → ``CursorInvalidError`` only for History / delta endpoints.
-    Retries transient 503/504 errors and network/TLS dropouts for GET/HEAD only,
-    with up to 3 retries (4 attempts total). Delays increase linearly by one
-    second per retry unless a positive Retry-After header overrides the delay
-    for 503/504 responses (capped at 10 seconds).
-    Other methods are never replayed; ambiguous 5xx/transport outcomes raise
-    ``AmbiguousOutcomeError``.
-
-    Connection budget (design §7): when ``permit_factory`` is given, each
-    attempt's urlopen lifecycle holds exactly one permit; the permit is
-    released *before* any retry wait, never across sleeps.
-    """
+    """Generic JSON HTTP for Graph API calls (stdlib)."""
     import http.client
-    import json
     import ssl
     import time
     import urllib.error
-    import urllib.parse
-    import urllib.request
 
     from mail_core.providers.connection_slots import permit_scope
 
@@ -443,77 +570,28 @@ def urllib_json_request(
     max_retries = 3
     method_upper = method.upper()
     retryable = method_upper in {"GET", "HEAD"}
+    urlopen_kwargs: dict[str, Any] = {
+        "timeout": timeout,
+        "explicit_proxy": outbound_proxy,
+        "explicit_no_proxy": no_proxy,
+        "proxy_mode": proxy_mode,
+    }
+    if connect_timeout is not None:
+        urlopen_kwargs["connect_timeout"] = connect_timeout
 
     for attempt in range(1, max_retries + 2):
-        if params:
-            # For GET, attach query; for POST with dict body use JSON
-            if method_upper == "GET":
-                q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
-                target_url = f"{url}?{q}" if q else url
-                data = None
-            else:
-                target_url = url
-                data = json.dumps(params).encode("utf-8")
-        else:
-            target_url = url
-            data = None
-
-        req = urllib.request.Request(target_url, data=data, method=method_upper)
-        for k, v in (headers or {}).items():
-            req.add_header(k, v)
-        if data is not None and method_upper != "GET":
-            req.add_header("Content-Type", "application/json")
-
-        # The permit scope covers only the urlopen lifecycle.  HTTP and
-        # transport failures are captured inside the scope (reading an
-        # HTTPError body still needs the connection) and mapped *after*
-        # the permit has been released, so retry waits hold no slot.
+        req = _build_json_request(method_upper, url, params, headers)
         http_outcome: tuple[int, str, dict] | None = None
         http_exc: BaseException | None = None
         transport_exc: BaseException | None = None
         with permit_scope(permit_factory, traffic_class):
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-                    # A187: bounded read. The pre-read cap follows the
-                    # endpoint/content-type (MIME $value: 64MiB, JSON:
-                    # 16MiB); JSON-looking bodies are re-checked against
-                    # the JSON cap after the read as well.
-                    ctype = resp.headers.get("Content-Type", "") if resp.headers else ""
-                    is_mime = "$value" in url.lower() or "application/json" not in ctype
-                    raw = _read_response_limited(
-                        resp, MAX_MIME_RESPONSE_BYTES if is_mime else MAX_JSON_RESPONSE_BYTES
-                    )
-                    if not raw:
-                        return {}
-                    if "application/json" in ctype or raw[:1] in (b"{", b"["):
-                        if len(raw) > MAX_JSON_RESPONSE_BYTES:
-                            raise ProviderHttpError(
-                                f"provider JSON response exceeds the "
-                                f"{MAX_JSON_RESPONSE_BYTES}-byte size limit",
-                                status=None,
-                            )
-                        # A291: a 2xx with an undecodable body must not leak
-                        # a bare JSONDecodeError. For safe methods the call
-                        # simply failed; for non-idempotent methods the
-                        # write may already have been applied, so the
-                        # outcome is ambiguous and must not be replayed.
-                        try:
-                            return json.loads(raw.decode("utf-8"))
-                        except (json.JSONDecodeError, UnicodeDecodeError) as decode_exc:
-                            if retryable:
-                                raise ProviderHttpError(
-                                    f"provider returned invalid JSON for {method_upper}: {decode_exc}",
-                                    status=None,
-                                ) from decode_exc
-                            raise AmbiguousOutcomeError(
-                                f"{method_upper} outcome ambiguous: provider returned "
-                                f"invalid JSON ({decode_exc})"
-                            ) from decode_exc
-                    return {"raw_bytes": raw}
+                with urlopen_outbound(req, **urlopen_kwargs) as resp:
+                    return _parse_json_response(resp, url, method_upper, retryable)
+            except NetworkSecurityError as exc:
+                raise ProviderHttpError(f"security policy blocked request: {exc}", status=None) from exc
             except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                hdrs = {k: v for k, v in exc.headers.items()} if exc.headers else {}
-                http_outcome = (exc.code, body, hdrs)
+                http_outcome = (exc.code, exc.read().decode("utf-8", errors="replace"), dict(exc.headers or {}))
                 http_exc = exc
             except (
                 urllib.error.URLError,
@@ -525,41 +603,14 @@ def urllib_json_request(
                 transport_exc = exc
 
         if http_outcome is not None:
-            code, body, hdrs = http_outcome
-            exc = http_exc
-            if code == 429:
-                raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
-            if code in (404, 410) and _url_is_sync_cursor_endpoint(url):
-                raise CursorInvalidError(body or str(exc), status=code, body=body, headers=hdrs) from exc
-            if code >= 500 and not retryable:
-                raise AmbiguousOutcomeError(
-                    f"{method_upper} outcome ambiguous after HTTP {code}"
-                ) from exc
-            if code in (503, 504) and retryable and attempt <= max_retries:
-                delay = attempt * 1.0
-                if hdrs.get("Retry-After"):
-                    try:
-                        ra = float(hdrs["Retry-After"])
-                        if ra > 0:
-                            delay = min(ra, 10.0)
-                    except (ValueError, TypeError):
-                        pass
-                sleep(delay)
-                continue
-            raise ProviderHttpError(body or str(exc), status=code, body=body, headers=hdrs) from exc
-
-        if transport_exc is not None:
-            exc = transport_exc
-            reason = getattr(exc, "reason", str(exc))
-            reason_str = str(reason).lower()
-            if "certificate_verify_failed" in reason_str:
-                raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
-            if not retryable:
-                raise AmbiguousOutcomeError(
-                    f"{method_upper} outcome ambiguous after transport error ({type(exc).__name__})"
-                ) from exc
-            if attempt <= max_retries:
-                delay = min(attempt * 1.0, 10.0)
-                sleep(delay)
-                continue
-            raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
+            assert http_exc is not None
+            delay = _retry_delay_for_http_outcome(
+                http_outcome[0], http_outcome[1], http_outcome[2],
+                url, method_upper, retryable, attempt, max_retries, http_exc,
+            )
+            sleep(delay)
+        elif transport_exc is not None:
+            delay = _retry_delay_for_transport_error(
+                transport_exc, method_upper, retryable, attempt, max_retries
+            )
+            sleep(delay)

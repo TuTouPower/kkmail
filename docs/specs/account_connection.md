@@ -1,7 +1,7 @@
 ---
 slug: account_connection
 status: active
-tasks: [t053, t054, t055, t076]
+tasks: [t053, t054, t055, t076, t089]
 ---
 # 账户连接与供应商技术规范 (Account Connection Specification)
 
@@ -58,7 +58,9 @@ ______________________________________________________________________
 ## 四、 通用 IMAP 接入与配置规范
 
 1. **连接与安全配置**：
-    - 默认强制开启 TLS 证书与主机名验证；特殊私有部署支持显式禁用 SSL/TLS（端口 143）。
+    - 默认强制开启 TLS 证书与主机名验证（保留目标域 SNI）；特殊私有部署支持显式禁用 SSL/TLS（仅允许回环主机，端口 143）。
+    - 出站连接统一经 `src/mail_core/net/` 建连原语解析代理策略：支持账号配置可选字段 `outbound_proxy`（`http` / `https` / `socks5` / `socks5h`，DTO 永不回显）与 `proxy_mode`（`auto` / `direct`），并回落到集中配置 `MAIL_CORE_OUTBOUND_PROXY` / `MAIL_CORE_NO_PROXY` 及标准环境变量 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY`。
+    - SSRF 防护严格区分受信任代理端点与远端目标：直连模式在 TCP 建连前完成 DNS 解析并校验全部 IP 后按 Pin-IP 直连，消除 DNS Rebinding TOCTOU 与事后 `getpeername()` 误伤；代理模式禁止将私网/回环目标字面地址经代理转发，同时放行位于私网或回环的受信任代理端点。
     - 服务端与目录交互时，对包含空格及非 ASCII 字符的 mailbox 名称自动实施双引号转义。
 2. **登录名规范（渐进披露）**：
     - 默认情况下登录名隐式回落至完整邮箱地址；

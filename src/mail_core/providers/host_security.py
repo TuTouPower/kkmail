@@ -1,113 +1,58 @@
-"""Shared IP checks for outbound IMAP host validation.
+"""IMAP target host validation helpers backed by ``mail_core.net.policy``.
 
-Known residual risk — DNS TOCTOU window (A350, accepted): the host is
-resolved and checked at build time in ``factory.validate_imap_host``, but
-``imaplib`` resolves the name again independently when connecting, and
-:func:`validate_imap_peer_address` re-checks the connected peer only
-after the TCP connection (and, for SSL, the TLS handshake) has already
-been established. A DNS rebinding attacker can therefore make the
-build-time check see a public address while the actual connection lands
-on a restricted address: the connection itself (port probing / protocol
-interaction with an internal service) can happen before the peer check
-aborts the session. Credentials are still protected — the peer check
-runs before login, so no password is ever sent to a restricted peer —
-but the connection-level exposure is a residual risk accepted in place
-of pinning the connection to the pre-resolved IP (which would require
-replacing imaplib's transport and re-validating the TLS certificate
-against the original hostname/SAN).
+Pin-IP SSRF enforcement (eliminating DNS rebinding TOCTOU) and proxy
+tunneling run at dial time inside :mod:`mail_core.net.dialer`. This module
+provides synchronous config-time syntactic validation and provider policy
+helpers without build-time DNS lookups or post-connect ``getpeername()`` checks.
 """
 
 from __future__ import annotations
 
-import ipaddress
-import os
-import socket
+from mail_core.net.policy import (
+    OutboundSecurityPolicy,
+    is_loopback_host,
+    is_restricted_ip,
+    is_syntactic_private_host,
+    private_hosts_allowed,
+)
 
 MICROSOFT_DOMAINS = frozenset((
     "outlook.com",
     "outlook.cn",
-    "hotmail.com",
-    "live.com",
-    "msn.com",
-    "hotmail.co.uk",
-    "live.co.uk",
-    "hotmail.fr",
-    "live.fr",
-    "hotmail.de",
-    "live.de",
     "outlook.de",
+    "hotmail.com",
+    "hotmail.co.uk",
+    "hotmail.fr",
+    "hotmail.de",
+    "hotmail.it",
+    "hotmail.es",
+    "hotmail.co.jp",
+    "live.com",
+    "live.cn",
+    "live.co.uk",
+    "live.fr",
+    "live.de",
+    "msn.com",
 ))
+
 MICROSOFT_IMAP_HOSTS = frozenset((
     "outlook.office365.com",
+    "outlook.office.com",
     "imap-mail.outlook.com",
     "imap.outlook.com",
     "imap.hotmail.com",
-    "outlook.office.com",
+    "partner.outlook.cn",
 ))
 
 
-def private_hosts_allowed() -> bool:
-    return os.environ.get("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
-def is_restricted_ip(address: str) -> bool:
-    ip = ipaddress.ip_address(address)
-    # A171: anything that is not globally routable is restricted. The old
-    # OR of is_private/is_loopback/is_link_local/is_reserved/is_unspecified
-    # missed CGNAT 100.64.0.0/10 (is_private is False for it), multicast
-    # 224.0.0.0/4 and IPv6 site-local fec0::/10. `not is_global` covers
-    # CGNAT, but CPython reports multicast and fec0::/10 as is_global, so
-    # those two ranges are added explicitly.
-    return not ip.is_global or ip.is_multicast or getattr(ip, "is_site_local", False)
-
-
-def validate_imap_peer_address(address: str) -> None:
-    if private_hosts_allowed():
-        return
-    if is_restricted_ip(address):
-        raise ValueError("IMAP peer is a private or loopback address (SSRF protection)")
-
-
 def is_private_host(host: str) -> bool:
-    h = host.strip().lower()
-    if h in ("localhost", "localhost.localdomain") or h.endswith(".local") or h.endswith(".localhost"):
-        return True
-    try:
-        return is_restricted_ip(h)
-    except ValueError:
-        pass
-    try:
-        for res in socket.getaddrinfo(h, None):
-            if is_restricted_ip(res[4][0]):
-                return True
-    except (socket.gaierror, socket.herror, OSError):
-        pass
-    return False
-
-
-def is_loopback_host(host: str) -> bool:
-    normalized = host.strip().lower().strip("[]")
-    if normalized == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_loopback
-    except ValueError:
-        return False
+    """Syntactic private/local/restricted-IP check without DNS side effects."""
+    return is_syntactic_private_host(host)
 
 
 def validate_imap_host(host: str) -> None:
-    # Build-time check only: a DNS TOCTOU window remains until the
-    # connect-time peer re-check in imap.py — see the residual-risk note
-    # in providers/host_security.py (A350).
-    if private_hosts_allowed():
-        return
-    if is_private_host(host):
-        raise ValueError(f"imap host {host!r} is a private or loopback address (SSRF protection)")
+    """Validate IMAP host syntax and reject private/loopback literals unless allowed."""
+    OutboundSecurityPolicy.from_env().validate_target_for_proxy(host)
 
 
 def reject_microsoft_imap(email: str, config: dict) -> None:

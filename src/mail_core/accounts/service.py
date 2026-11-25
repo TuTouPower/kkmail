@@ -131,10 +131,16 @@ def update_account(
     acc = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
     if acc is None:
         raise LookupError("account not found")
-    from mail_core.accounts.connection import merge_credentials, validate_connection
+    from mail_core.accounts.connection import (
+        merge_credentials,
+        normalize_account_config,
+        validate_connection,
+        validate_outbound_proxy_config,
+    )
     from mail_core.providers.host_security import reject_microsoft_imap
     from mail_core.security.credentials import credential_edit
-    effective_config = {**(acc.config or {}), **(config_patch or {})}
+
+    effective_config = normalize_account_config({**(acc.config or {}), **(config_patch or {})})
     if acc.provider == "imap" and (config_patch or credentials or clear_credentials or sync_enabled is True):
         reject_microsoft_imap(acc.email, effective_config)
     if config_patch:
@@ -165,18 +171,14 @@ def update_account(
         if not sync_enabled:
             acc.sync_activity = SyncActivity.IDLE.value
     if config_patch:
-        merged = dict(acc.config or {})
-        merged.update(config_patch)
-        for key in ("imap_user", "username"):
-            if key in config_patch and (config_patch[key] is None or not str(config_patch[key]).strip()):
-                merged.pop(key, None)
         if (acc.provider or "").lower() == "imap":
-            imap_host = merged.get("imap_host") or merged.get("host")
+            imap_host = effective_config.get("imap_host") or effective_config.get("host")
             if imap_host:
                 from mail_core.providers.host_security import validate_imap_host
 
                 validate_imap_host(imap_host)
-        acc.config = merged
+        validate_outbound_proxy_config(effective_config)
+        acc.config = effective_config
     session.flush()
     return acc
 

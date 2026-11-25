@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Mapping
+from typing import Any, Mapping
 
 from mail_core.config.models import ConfigError, MailCoreConfig
 
@@ -45,6 +45,29 @@ def is_sidecar_enabled(env: Mapping[str, str] | None = None) -> bool:
     return _parse_bool(source.get("KKMAIL_SIDECAR"), False)
 
 
+def _load_outbound_network_fields(source: Mapping[str, str]) -> dict[str, Any]:
+    no_proxy = next(
+        (source[k].strip() for k in ("MAIL_CORE_NO_PROXY", "NO_PROXY", "no_proxy") if (source.get(k) or "").strip()),
+        None,
+    )
+    return {
+        "outbound_proxy": (source.get("MAIL_CORE_OUTBOUND_PROXY") or "").strip() or None,
+        "no_proxy": no_proxy,
+        "outbound_connect_timeout_s": _parse_float(
+            source.get("MAIL_CORE_CONNECT_TIMEOUT_S"), 10.0, "outbound_connect_timeout_s"
+        ),
+        "outbound_per_attempt_timeout_s": _parse_float(
+            source.get("MAIL_CORE_CONNECT_ATTEMPT_TIMEOUT_S"), 5.0, "outbound_per_attempt_timeout_s"
+        ),
+        "outbound_circuit_failure_threshold": _parse_int(
+            source.get("MAIL_CORE_CIRCUIT_FAILURE_THRESHOLD"), 2, "outbound_circuit_failure_threshold"
+        ),
+        "outbound_circuit_cooldown_s": _parse_float(
+            source.get("MAIL_CORE_CIRCUIT_COOLDOWN_S"), 30.0, "outbound_circuit_cooldown_s"
+        ),
+    }
+
+
 def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
     """Load configuration from environment dictionary (defaults to os.environ)."""
     source = os.environ if env is None else env
@@ -60,6 +83,7 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
         allow_test_providers=_parse_bool(source.get("MAIL_CORE_ALLOW_TEST_PROVIDERS"), False),
         forwarded_allow_ips=source.get("MAIL_CORE_FORWARDED_ALLOW_IPS") or None,
         proxy_headers=_parse_bool(source.get("MAIL_CORE_PROXY_HEADERS"), False),
+        **_load_outbound_network_fields(source),
         database_url=source.get("MAIL_CORE_DATABASE_URL") or "",
         db_pool_size=_parse_int(source.get("MAIL_CORE_DB_POOL_SIZE"), 10, "db_pool_size"),
         db_max_overflow=_parse_int(source.get("MAIL_CORE_DB_MAX_OVERFLOW"), 10, "db_max_overflow"),

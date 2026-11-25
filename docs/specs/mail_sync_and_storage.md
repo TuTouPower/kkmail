@@ -1,7 +1,7 @@
 ---
 slug: mail_sync_and_storage
 status: active
-tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088]
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089]
 ---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
@@ -15,7 +15,7 @@ ______________________________________________________________________
 
 ### 1. IMAP 协议同步与异常容错
 
-- **连接与安全性**：强制开启 TLS 证书与主机名校验，Socket 读取默认超时放宽至 60 秒；mailbox 文件夹包含空格或特殊字符时自动带双引号转义。
+- **连接与安全性**：统一由 `src/mail_core/net/` 原语建连（覆盖短连接同步、`open_idle_session` 与 OAuth HTTP 客户端策略解析），强制开启 TLS 证书与主机名 SNI 校验，直连实施 Pin-IP SSRF 防护（禁用事后 `getpeername()` 校验），支持 HTTP/HTTPS `CONNECT` 与 SOCKS5/SOCKS5h 代理隧道；连接预算分离为有界 `connect_timeout`（默认 10s，单 IP 尝试上限 5s）与建连/TLS 握手完成后的 `io_timeout`（默认 60s），双栈建连按 IPv4 优先尝试并保留 `TimeoutError` / 远端拒绝语义不被本地 IPv6 `ENETUNREACH` 掩盖；mailbox 文件夹包含空格或特殊字符时自动带双引号转义。
 - **目录发现与 RFC 6154 属性映射**：
     - 标准角色映射：`\Sent` / 已发送 映射为 `sent`；`Deleted Messages` / `\Trash` 映射为 `trash`；`\Drafts` 映射为 `drafts`；`\All` 映射为 `all`；`\Flagged` / `\Starred` 映射为 `flagged`；
     - 结构节点处理：带有 `\NoSelect` 属性的目录作为 `paused` 结构节点保留，用于树形层级展示，系统不为其排发邮件同步作业；
@@ -43,8 +43,9 @@ ______________________________________________________________________
     - **60**：后台正文归档批次续跑；
     - **75**：文件夹定时增量轮询（设去重键 `delta:{account_id}:{folder_id}`，防止任务堆积）；
     - **80**：定期数据对账检查。
-2. **连接池预算控制**：
+2. **连接池预算控制与端点熔断隔离**：
     - 全局与后台网络连接设有硬性槽位控制，通过 PostgreSQL 会话级 Advisory Lock 协同持有；
+    - 不可达端点由进程级 `EndpointBulkhead`（按 `(proxy_safe_key, host, port)` 索引，仅统计建连阶段传输超时/不可达失败）提供有界负缓存冷却与单探针半开恢复；冷却窗口内并发请求在获取全局连接槽位前即快速失败并立即释放预算，避免同一受阻服务商的多账号重试耗尽槽位饿死其余健康账号；
     - 容量不足时任务通过 `reschedule_job` 延后执行，不计入失败重试次数。
 3. **执行跟踪与孤儿清理**：
     - 同步作业持有唯一的执行代际 UUID，请求通过关联表绑定具体代次；

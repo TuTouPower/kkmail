@@ -79,6 +79,7 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**模板契约测试**|工具链合法性冒烟|`pytest .repo_template/tests -q -m contract`|
 |**敏感文档防泄漏门禁**|个人邮箱/宿主路径/凭据泄漏扫描|`python3 scripts/check_doc_sensitive.py docs --check`|
 |**后端单元/集成测试**|FastAPI + PG + Worker|`scripts/run-mail-core-tests.sh run`|
+|**出站代理、Pin-IP 与端点熔断**|CONNECT/SOCKS5 代理 TLS+SNI、双栈超时保留、全局槽位隔离|`KKMAIL_TEST_MODE=unit PYTHONPATH=src .venv/bin/pytest --no-cov tests/mail_core/test_net_outbound.py`|
 |**UI 稳定编号与引用**|快捷键、气泡浮标、复制格式与唯一性|`(cd src/frontend && npm test -t uiReference)`|
 |**原生下拉控件门禁**|禁止 `<select>` / `<datalist>`，原语 token 化|`npm --prefix src/frontend run css:check`；组件测试 `Select.test.tsx`；双主题 E2E `dropdown_theming.spec.ts`|
 |**Gmail 标签回填**|历史 Important 成员一次性回填、幂等与 checkpoint 不变|`scripts/run-mail-core-tests.sh run -k test_gmail_label_backfill`；运维入口 `python -m mail_core --backfill-gmail-labels`|
