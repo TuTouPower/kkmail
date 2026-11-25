@@ -26,8 +26,8 @@ from mail_core.mail.domain.enums import (
     OutboxEventType,
     SyncActivity,
 )
+from mail_core.mail.domain.failures import StructuredFailure, coerce_structured_failure
 from mail_core.mail.storage.models import Account, OutboxEvent
-from mail_core.security.redact import safe_provider_summary
 
 CONNECTIVITY_FAILURE_THRESHOLD = 5
 CONNECTIVITY_WINDOW = timedelta(seconds=300)
@@ -149,7 +149,7 @@ def record_connectivity_failure(
     session: Session,
     account_id: uuid.UUID,
     *,
-    error: str,
+    error: StructuredFailure | BaseException | str,
     now: datetime | None = None,
 ) -> ConnectivityState | None:
     """Advance the breaker on a transport failure; return the resulting state.
@@ -177,7 +177,7 @@ def record_connectivity_failure(
 
     acc.connectivity_state = state.value
     cfg[CFG_FAILURE_TIMESTAMPS] = [stamp.isoformat() for stamp in stamps]
-    cfg[CFG_LAST_CONNECTIVITY_ERROR] = safe_provider_summary(error)
+    cfg[CFG_LAST_CONNECTIVITY_ERROR] = coerce_structured_failure(error).format()
     cfg[CFG_LAST_SYNCED_AT] = now.isoformat()
     acc.config = cfg
     _publish_connectivity_change(session, acc, previous)

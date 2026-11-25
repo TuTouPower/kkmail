@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import OutboxEventType, RemoteOperationStatus
+from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.mail.storage.models import OutboxEvent, RemoteOperation
 from mail_core.security.redact import redact
 
@@ -187,7 +188,7 @@ def mark_remote_operation(
     op: RemoteOperation,
     *,
     status: RemoteOperationStatus,
-    error: str | None = None,
+    error: StructuredFailure | BaseException | str | None = None,
     next_attempt_at: datetime | None = None,
     expected_revision: int | None = None,
 ) -> bool:
@@ -221,7 +222,12 @@ def mark_remote_operation(
     if status in (RemoteOperationStatus.DONE, RemoteOperationStatus.IN_PROGRESS):
         op.last_error = None
     elif error:
-        op.last_error = redact(error[:2000])
+        if isinstance(error, StructuredFailure):
+            op.last_error = error.format()[:2000]
+        elif isinstance(error, BaseException):
+            op.last_error = StructuredFailure.from_exception(error).format()[:2000]
+        else:
+            op.last_error = redact(error[:2000])
     if status == RemoteOperationStatus.IN_PROGRESS:
         op.attempts = int(op.attempts) + 1
     session.add(

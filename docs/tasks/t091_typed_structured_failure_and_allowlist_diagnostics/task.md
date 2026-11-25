@@ -35,11 +35,11 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：出站/IMAP/HTTP 层抛出的结构化传输或协议异常（如代理握手失败、TCP 超时 `errno=110`、不可达 `errno=101`、TLS 握手失败、HTTP 5xx/429/401）通过同步引擎与 Worker 后，Worker 日志、`WorkerJob.last_error` 与 `accounts` 健康诊断 `last_connectivity_error` 均完整保留可读故障阶段、异常类型与结构化状态码/errno，不出现 `code=[REDACTED]` 或退化为裸 `"OSError"`。
-- [ ] AC-002：安全脱敏边界不退化：URL query `?code=...` / `?token=...`、JSON `"code": "..."` / `"token": "..."`、HTTP `Authorization` / `Cookie` / JWT / DSN 与原始异常栈中的任何凭据秘密仍被完整替换为 `[REDACTED]`，绝不进入日志、`WorkerJob.last_error` 或账号诊断字段。
-- [ ] AC-003：`sync/context.py` 的结构化故障域分类（`AUTH` / `TRANSPORT` / `CONTROL` / `UNKNOWN`）与 `StructuredFailure` 保持单一事实来源，非网络 `OSError`（如 `ENOSPC` / `EMFILE` / `EACCES`）与自由文本错误仍严格不归入 `TRANSPORT`。
-- [ ] AC-004：后端全量 PostgreSQL 测试套件（`scripts/run-mail-core-tests.sh run`）与 `docs/blueprint/testing.md` 的 `test_cmd`、`blackbox_verify` 及 `export_openapi.py --check` / `openapi:check` 全部通过。
-- [ ] AC-005：同步更新 `docs/specs/mail_sync_and_storage.md`（登记 `t091`）及对应 blueprint 文档；转办来源 `p095` 完整闭环。
+- [x] AC-001：出站/IMAP/HTTP 层抛出的结构化传输或协议异常（如代理握手失败、TCP 超时 `errno=110`、不可达 `errno=101`、TLS 握手失败、HTTP 5xx/429/401）通过同步引擎与 Worker 后，Worker 日志、`WorkerJob.last_error` 与 `accounts` 健康诊断 `last_connectivity_error` 均完整保留可读故障阶段、异常类型与结构化状态码/errno，不出现 `code=[REDACTED]` 或退化为裸 `"OSError"`。
+- [x] AC-002：安全脱敏边界不退化：URL query `?code=...` / `?token=...`、JSON `"code": "..."` / `"token": "..."`、HTTP `Authorization` / `Cookie` / JWT / DSN 与原始异常栈中的任何凭据秘密仍被完整替换为 `[REDACTED]`，绝不进入日志、`WorkerJob.last_error` 或账号诊断字段。
+- [x] AC-003：`sync/context.py` 的结构化故障域分类（`AUTH` / `TRANSPORT` / `CONTROL` / `UNKNOWN`）与 `StructuredFailure` 保持单一事实来源，非网络 `OSError`（如 `ENOSPC` / `EMFILE` / `EACCES`）与自由文本错误仍严格不归入 `TRANSPORT`。
+- [x] AC-004：后端全量 PostgreSQL 测试套件（`scripts/run-mail-core-tests.sh run`）与 `docs/blueprint/testing.md` 的 `test_cmd`、`blackbox_verify` 及 `export_openapi.py --check` / `openapi:check` 全部通过。
+- [x] AC-005：同步更新 `docs/specs/mail_sync_and_storage.md`（登记 `t091`）及对应 blueprint 文档；转办来源 `p095` 完整闭环。
 
 ### 可测试性声明
 

@@ -8,10 +8,9 @@ Account health is derived only from that structure.
 
 from __future__ import annotations
 
-import errno
 import logging
-import ssl
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -19,31 +18,14 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import ExecutionOrigin, normalize_execution_origin
+from mail_core.mail.domain.failures import (
+    FailureDomain,
+    StructuredFailure,
+    coerce_structured_failure,
+)
 from mail_core.mail.storage.models import SyncRequest
 
 log = logging.getLogger(__name__)
-
-_NETWORK_ERRNOS = frozenset(
-    value
-    for value in (
-        getattr(errno, name, None)
-        for name in (
-            "ECONNRESET",
-            "ECONNREFUSED",
-            "ETIMEDOUT",
-            "EHOSTUNREACH",
-            "ENETUNREACH",
-            "ENETRESET",
-            "ENETDOWN",
-            "EPIPE",
-            "ESHUTDOWN",
-            "ENOTCONN",
-            "EAGAIN",
-            "EAI_AGAIN",
-        )
-    )
-    if value is not None
-)
 
 
 def _coerce_uuid(value: Any) -> uuid.UUID | None:
@@ -122,13 +104,6 @@ def execution_origin_for_job(session: Session, job: Any) -> tuple[ExecutionOrigi
     )
 
 
-class FailureDomain(StrEnum):
-    AUTH = "auth"
-    TRANSPORT = "transport"
-    CONTROL = "control"
-    UNKNOWN = "unknown"
-
-
 @dataclass(frozen=True)
 class FailureClassification:
     domain: FailureDomain
@@ -144,30 +119,14 @@ _TRANSPORT = FailureClassification(FailureDomain.TRANSPORT)
 _CONTROL = FailureClassification(FailureDomain.CONTROL)
 
 
-def _classify_exception(result: BaseException) -> FailureClassification:
-    from mail_core.providers.http import (
-        PermanentAuthError,
-        ProviderHttpError,
-        RateLimitedError,
-    )
-
-    if isinstance(result, PermanentAuthError):
-        return _AUTH
-    status = getattr(result, "status", None)
-    if status == 401 or getattr(result, "status_code", None) == 401:
-        return _AUTH
-    if isinstance(result, RateLimitedError):
-        return _CONTROL
-    if isinstance(result, (ConnectionError, TimeoutError, ssl.SSLError)):
-        return _TRANSPORT
-    if isinstance(result, OSError) and result.errno in _NETWORK_ERRNOS:
-        return _TRANSPORT
-    if isinstance(result, ProviderHttpError) and isinstance(status, int) and 500 <= status <= 599:
-        return _TRANSPORT
-    return _UNKNOWN
-
-
-def _classify_result_dict(result: dict[str, Any]) -> FailureClassification:
+def _classify_result_dict(result: Mapping[str, Any]) -> FailureClassification:
+    failure_raw = result.get("failure")
+    if isinstance(failure_raw, StructuredFailure):
+        return FailureClassification(failure_raw.domain)
+    if isinstance(failure_raw, Mapping):
+        parsed = StructuredFailure.from_dict(failure_raw)
+        if parsed is not None:
+            return FailureClassification(parsed.domain)
     code = result.get("failure_code")
     if isinstance(code, str):
         try:
@@ -183,20 +142,61 @@ def _classify_result_dict(result: dict[str, Any]) -> FailureClassification:
 
 
 def classify_failure(result: Any) -> FailureClassification:
-    """Classify a failure by type, HTTP status, errno or producer-attached code.
+    """Classify a failure from StructuredFailure single source of truth.
 
     Free-text provider messages are deliberately ignored: they are redacted,
     localized and reused for unrelated errors, so substring matching cannot be
     a classification contract.
     """
-
+    if isinstance(result, StructuredFailure):
+        return FailureClassification(result.domain)
     if isinstance(result, BaseException):
-        return _classify_exception(result)
-    if isinstance(result, dict):
+        return FailureClassification(StructuredFailure.from_exception(result).domain)
+    if isinstance(result, Mapping):
         return _classify_result_dict(result)
     if result == 401:
         return _AUTH
     return _UNKNOWN
+
+
+def structured_failure_from_outcome(result: Any) -> StructuredFailure:
+    """Extract an allowlisted :class:`StructuredFailure` from a handler outcome or exception."""
+    if isinstance(result, StructuredFailure):
+        return result
+    if isinstance(result, BaseException):
+        return StructuredFailure.from_exception(result)
+    if isinstance(result, Mapping):
+        embedded = result.get("failure")
+        if isinstance(embedded, StructuredFailure):
+            return embedded
+        if isinstance(embedded, Mapping):
+            parsed = StructuredFailure.from_dict(embedded)
+            if parsed is not None:
+                return parsed
+        err = result.get("error")
+        if isinstance(err, StructuredFailure):
+            return err
+        if isinstance(err, str) and err.strip():
+            projected = StructuredFailure.from_text(err)
+            if projected.domain is FailureDomain.UNKNOWN:
+                classified = _classify_result_dict(result).domain
+                if classified is not FailureDomain.UNKNOWN:
+                    return StructuredFailure(
+                        domain=classified,
+                        error_type=projected.error_type,
+                        phase=projected.phase,
+                        http_status=projected.http_status,
+                        errno=projected.errno,
+                        socks_reply=projected.socks_reply,
+                        retry_after_s=projected.retry_after_s,
+                        symbolic_code=projected.symbolic_code,
+                        safe_reason=projected.safe_reason,
+                    )
+            return projected
+        status = result.get("status")
+        domain = _classify_result_dict(result).domain
+        return coerce_structured_failure(str(status) if status is not None else None) if domain is FailureDomain.UNKNOWN else StructuredFailure(domain=domain, error_type="ProviderError")
+    return coerce_structured_failure(result)
 
 
 class AccountFailureKind(StrEnum):

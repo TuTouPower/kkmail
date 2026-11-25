@@ -16,11 +16,13 @@ from mail_core.accounts.health import (
     record_connectivity_success,
     set_sync_activity,
 )
+from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.sync.context import (
     AccountFailureKind,
     account_failure_kind,
     execution_origin_for_job,
     resolve_sync_context,
+    structured_failure_from_outcome,
 )
 from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType
 from mail_core.mail.storage.models import Account, WorkerJob
@@ -178,16 +180,11 @@ def _apply_account_health(session: Session, job: WorkerJob, result: Any) -> None
     if kind is AccountFailureKind.AUTH:
         mark_credential_invalid(session, job.account_id)
     elif kind is AccountFailureKind.TRANSPORT:
-        if isinstance(result, dict):
-            detail = result.get("error")
-        else:
-            from mail_core.security.redact import safe_error
-
-            detail = safe_error(result)
+        failure = structured_failure_from_outcome(result)
         record_connectivity_failure(
             session,
             job.account_id,
-            error=str(detail or status or "transport failure"),
+            error=failure,
         )
 
 
@@ -222,12 +219,13 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
     # the Worker framework on the same job row: counted failure + exponential
     # backoff, no forged ``done`` and no privately spawned successor.
     if status == "provider_error" and not result.get("followup_scheduled"):
+        failure = structured_failure_from_outcome(result)
         reschedule_job(
             session,
             job,
             worker_id=worker_id,
             count_failure=True,
-            error=str(result.get("error") or status),
+            error=failure,
         )
         return False
 
@@ -447,8 +445,6 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         fail_job(session, job, f"unknown job_type {job.job_type}", worker_id=worker_id)
         return False
     except Exception as exc:
-        from mail_core.security.redact import safe_error
-
         if is_capacity_error(exc):
             # Budget/control deferral: reschedule without counting a
             # failure and without touching account health.
@@ -461,14 +457,15 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 delay_seconds=_coerce_retry_after(getattr(exc, "retry_after_seconds", None)),
             )
             return False
-        log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
+        failure = StructuredFailure.from_exception(exc)
+        log.error("job %s (%s) failed: %s", job.id, job.job_type, failure)
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
 
         # Classify the failure orthogonally: a transport blip degrades
         # connectivity, a confirmed auth rejection invalidates the credential,
         # and everything else leaves account health untouched.
-        _apply_account_health(session, job, exc)
+        _apply_account_health(session, job, failure)
         # Unified framework retry on the same job row: counted failure and
         # exponential backoff (terminal cap honoured), no forged successor.
         reschedule_job(
@@ -476,6 +473,6 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             job,
             worker_id=worker_id,
             count_failure=True,
-            error=exc,
+            error=failure,
         )
         return False

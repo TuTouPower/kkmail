@@ -81,6 +81,7 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**后端单元/集成测试**|FastAPI + PG + Worker|`scripts/run-mail-core-tests.sh run`|
 |**出站代理、Pin-IP 与端点熔断**|CONNECT/SOCKS5 代理 TLS+SNI、双栈超时保留、全局槽位隔离|`KKMAIL_TEST_MODE=unit PYTHONPATH=src .venv/bin/pytest --no-cov tests/mail_core/test_net_outbound.py tests/mail_core/test_net_resilience.py`|
 |**WorkerJob 执行血缘与 0006 迁移**|强类型 `execution_origin` 契约、后台巡检/IDLE/续跑继承与 `20261125_0006` 迁移回填|`scripts/run-mail-core-tests.sh run -k "test_t090 or test_sync_background_lineage or test_sync_backend_handler_isolation or test_migration_validation"`|
+|**结构化故障与诊断白名单投影**|`StructuredFailure` 全链路阶段/errno 留存与严格自由文本 `redact()` 隔离|`scripts/run-mail-core-tests.sh run -k "test_t091 or test_logging_trace_and_redact or test_safe_error_converge_a325 or test_redact_and_poll"`|
 |**UI 稳定编号与引用**|快捷键、气泡浮标、复制格式与唯一性|`(cd src/frontend && npm test -t uiReference)`|
 |**原生下拉控件门禁**|禁止 `<select>` / `<datalist>`，原语 token 化|`npm --prefix src/frontend run css:check`；组件测试 `Select.test.tsx`；双主题 E2E `dropdown_theming.spec.ts`|
 |**Gmail 标签回填**|历史 Important 成员一次性回填、幂等与 checkpoint 不变|`scripts/run-mail-core-tests.sh run -k test_gmail_label_backfill`；运维入口 `python -m mail_core --backfill-gmail-labels`|

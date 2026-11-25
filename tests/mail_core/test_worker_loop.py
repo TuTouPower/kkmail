@@ -535,53 +535,9 @@ def test_tick_failed_job_not_counted_as_handled():
     assert result.handled == 0
 
 
-def test_handle_job_sanitizes_error_in_connectivity_failure():
-    # t076: 账号同步状态写入函数已删除；异常路径由
-    # account_failure_kind 分类后调用 record_connectivity_failure 写入脱敏诊断。
-    # 旧用例整体重写，patch 目标改为 record_connectivity_failure。
-    import uuid
-    from mail_core.mail.domain.enums import JobType
-    from mail_core.mail.storage.models import Account, WorkerJob
-    from mail_core.sync.jobs import _max_attempts
-    from mail_core.worker.handlers import handle_job
-
-    account_id = uuid.uuid4()
-    job = WorkerJob(
-        account_id=account_id,
-        job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
-        status="claimed",
-        payload={"account_id": str(account_id)},
-        execution_origin="foreground",
-    )
-    job.id = uuid.uuid4()
-    # Account status is only marked failed on a terminal non-transient
-    # failure, so make this execution the last allowed attempt.
-    job.failure_attempts = _max_attempts() - 1
-
-    mock_account = MagicMock(spec=Account)
-    mock_account.sync_enabled = True
-
-    session = MagicMock()
-    session.in_transaction.return_value = True
-    session.get.return_value = mock_account
-
-    # p088: failure domain is structural now, so use a real transport error.
-    # The secret still lives only in the free-text message that must be redacted.
-    sensitive_exc = ConnectionError("connection failed: postgresql://user:my_secret_password@host/db?token=ya29.secret")
-
-    with (
-        patch("mail_core.sync.engine.sync_account_folders", side_effect=sensitive_exc),
-        patch("mail_core.worker.handlers.record_connectivity_failure") as mock_failure,
-        patch("mail_core.worker.handlers.reschedule_job"),
-    ):
-        ok = handle_job(session, job, worker_id="test-worker")
-        assert ok is False
-        mock_failure.assert_called_once()
-        passed_error = mock_failure.call_args.kwargs.get("error", "")
-        assert "my_secret_password" not in passed_error
-        # A325: non-provider exception messages are dropped entirely; only
-        # the exception type survives in the persisted status error.
-        assert passed_error == "ConnectionError"
+# (t091: test_handle_job_sanitizes_error_in_connectivity_failure removed — superseded by
+# StructuredFailure typed boundary on record_connectivity_failure; covered end-to-end against PG
+# in tests/mail_core/test_t091_pg_worker_diagnostics_integration.py.)
 
 
 def test_handle_job_resolves_credential_store_inside_job_error_boundary():

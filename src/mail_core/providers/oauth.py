@@ -36,6 +36,12 @@ from mail_core.security.credentials import (
     load_json_secret,
     credential_edit,
 )
+from mail_core.mail.domain.failures import (
+    FailurePhase,
+    StructuredFailure,
+    attach_failure_phase,
+    failure_phase_of,
+)
 from mail_core.net.bulkhead import EndpointCircuitOpenError
 from mail_core.net.http_client import urlopen_outbound
 from mail_core.net.policy import NetworkSecurityError
@@ -84,6 +90,30 @@ TokenHttpFn = Callable[[str, str, dict[str, str], dict[str, str] | None], dict[s
 
 class OAuthError(RuntimeError):
     """Token endpoint failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _raise_oauth_http_error(exc: ProviderHttpError) -> None:
+    prefix = f"token endpoint HTTP {exc.status}" if exc.status is not None else "token endpoint transport error"
+    err = OAuthError(
+        f"{prefix}: {exc}",
+        status=exc.status,
+        retry_after_seconds=getattr(exc, "retry_after_seconds", None),
+    )
+    inferred_phase = StructuredFailure.from_exception(exc).phase
+    phase = inferred_phase or (FailurePhase.AUTH if exc.status == 401 else FailurePhase.HTTP)
+    attach_failure_phase(err, phase)
+    raise err from exc
 
 
 _OAUTH_ERROR_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -222,7 +252,7 @@ class OAuthTokenClient:
                 with permit_scope(self.permit_factory, self.traffic_class):
                     resp = post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
             except ProviderHttpError as exc:
-                raise OAuthError(f"token endpoint HTTP {exc.status}: {exc}") from exc
+                _raise_oauth_http_error(exc)
             if resp.get("error"):
                 error_code = _sanitize_token_error_text(resp.get("error"), limit=80)
                 error_description = _sanitize_token_error_text(resp.get("error_description"), limit=200)
@@ -296,6 +326,36 @@ def _unwrap_circuit_open(exc: BaseException) -> EndpointCircuitOpenError | None:
     return reason if isinstance(reason, EndpointCircuitOpenError) else None
 
 
+def _raise_token_http_error(exc: Any, *, attempt: int, max_retries: int, sleep: Any) -> None:
+    raw = exc.read().decode("utf-8", errors="replace")
+    hdrs = dict(exc.headers or {})
+    if exc.code == 429:
+        raise attach_failure_phase(
+            RateLimitedError(raw or str(exc), status=429, body=raw, headers=hdrs),
+            FailurePhase.HTTP,
+        ) from exc
+    if exc.code in (503, 504) and attempt <= max_retries:
+        sleep(_extract_retry_after_seconds(hdrs, default_delay=attempt * 1.0))
+        return
+    phase = FailurePhase.AUTH if exc.code == 401 else FailurePhase.HTTP
+    raise attach_failure_phase(
+        ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=hdrs),
+        phase,
+    ) from exc
+
+
+def _raise_token_url_error(exc: Any) -> None:
+    circuit_exc = _unwrap_circuit_open(exc)
+    if circuit_exc is not None:
+        raise circuit_exc from exc
+    inner = getattr(exc, "reason", None)
+    inner_phase = failure_phase_of(inner) if isinstance(inner, BaseException) else None
+    raise attach_failure_phase(
+        ProviderHttpError(f"token transport error: {exc.reason}", status=None),
+        inner_phase or FailurePhase.HTTP,
+    ) from exc
+
+
 def default_urllib_token_post(
     method: str,
     url: str,
@@ -359,19 +419,10 @@ def default_urllib_token_post(
         except NetworkSecurityError as exc:
             raise ProviderHttpError(f"security policy blocked token request: {exc}", status=None) from exc
         except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            hdrs = dict(exc.headers or {})
-            if exc.code == 429:
-                raise RateLimitedError(raw or str(exc), status=429, body=raw, headers=hdrs) from exc
-            if exc.code in (503, 504) and attempt <= max_retries:
-                sleep(_extract_retry_after_seconds(hdrs, default_delay=attempt * 1.0))
-                continue
-            raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=hdrs) from exc
+            _raise_token_http_error(exc, attempt=attempt, max_retries=max_retries, sleep=sleep)
+            continue
         except urllib.error.URLError as exc:
-            circuit_exc = _unwrap_circuit_open(exc)
-            if circuit_exc is not None:
-                raise circuit_exc from exc
-            raise ProviderHttpError(f"token transport error: {exc.reason}", status=None) from exc
+            _raise_token_url_error(exc)
         except EndpointCircuitOpenError:
             raise
     raise AssertionError("unreachable: token POST retry loop fell through")  # pragma: no cover
@@ -511,14 +562,27 @@ def _retry_delay_for_http_outcome(
     exc: BaseException,
 ) -> float:
     if code == 429:
-        raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
+        raise attach_failure_phase(
+            RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs),
+            FailurePhase.HTTP,
+        ) from exc
     if code in (404, 410) and _url_is_sync_cursor_endpoint(url):
-        raise CursorInvalidError(body or str(exc), status=code, body=body, headers=hdrs) from exc
+        raise attach_failure_phase(
+            CursorInvalidError(body or str(exc), status=code, body=body, headers=hdrs),
+            FailurePhase.HTTP,
+        ) from exc
     if code >= 500 and not retryable:
-        raise AmbiguousOutcomeError(f"{method_upper} outcome ambiguous after HTTP {code}") from exc
+        raise attach_failure_phase(
+            AmbiguousOutcomeError(f"{method_upper} outcome ambiguous after HTTP {code}"),
+            FailurePhase.HTTP,
+        ) from exc
     if code in (503, 504) and retryable and attempt <= max_retries:
         return _extract_retry_after_seconds(hdrs, default_delay=attempt * 1.0)
-    raise ProviderHttpError(body or str(exc), status=code, body=body, headers=hdrs) from exc
+    phase = FailurePhase.AUTH if code == 401 else FailurePhase.HTTP
+    raise attach_failure_phase(
+        ProviderHttpError(body or str(exc), status=code, body=body, headers=hdrs),
+        phase,
+    ) from exc
 
 
 def _retry_delay_for_transport_error(
@@ -531,16 +595,28 @@ def _retry_delay_for_transport_error(
     circuit_exc = _unwrap_circuit_open(exc)
     if circuit_exc is not None:
         raise circuit_exc from exc
-    reason = getattr(exc, "reason", str(exc))
+    reason = getattr(exc, "reason", exc)
+    transport_phase = (
+        failure_phase_of(reason) if isinstance(reason, BaseException) else None
+    ) or failure_phase_of(exc)
     if "certificate_verify_failed" in str(reason).lower():
-        raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
+        raise attach_failure_phase(
+            ProviderHttpError(f"transport error: {reason}", status=None),
+            transport_phase or FailurePhase.TLS,
+        ) from exc
     if not retryable:
-        raise AmbiguousOutcomeError(
-            f"{method_upper} outcome ambiguous after transport error ({type(exc).__name__})"
+        raise attach_failure_phase(
+            AmbiguousOutcomeError(
+                f"{method_upper} outcome ambiguous after transport error ({type(exc).__name__})"
+            ),
+            transport_phase or FailurePhase.HTTP,
         ) from exc
     if attempt <= max_retries:
         return min(attempt * 1.0, 10.0)
-    raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
+    raise attach_failure_phase(
+        ProviderHttpError(f"transport error: {reason}", status=None),
+        transport_phase or FailurePhase.HTTP,
+    ) from exc
 
 
 def urllib_json_request(

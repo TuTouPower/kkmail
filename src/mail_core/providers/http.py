@@ -53,6 +53,8 @@ def _parse_retry_after(value: str) -> float | None:
 class RateLimitedError(ProviderHttpError):
     """HTTP 429 — caller should back off using retry_after_seconds."""
 
+    _failure_domain = "control"
+
     def __init__(
         self,
         message: str = "rate limited",
@@ -133,4 +135,6 @@ class FixtureTransport:
 
 class PermanentAuthError(Exception):
     """Provider rejected credentials permanently (e.g. Basic auth disabled, account closed)."""
+
+    _failure_domain = "auth"
 

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional, Protocol, Sequence
 
+from mail_core.mail.domain.failures import StructuredFailure
+
 
 @dataclass(frozen=True, slots=True)
 class RemoteFolder:
@@ -135,6 +137,7 @@ class RemoteOperationResult:
     idempotent_noop: bool = False
     error: str | None = None
     remote_state: dict[str, Any] = field(default_factory=dict)
+    failure: StructuredFailure | None = None
 
 
 @dataclass(frozen=True, slots=True)

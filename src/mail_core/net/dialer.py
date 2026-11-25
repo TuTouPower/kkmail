@@ -10,6 +10,7 @@ import ssl
 import time
 from typing import Any, Callable, Mapping, Sequence
 
+from mail_core.mail.domain.failures import FailurePhase, attach_failure_phase
 from mail_core.net.bulkhead import EndpointBulkhead, EndpointKey, default_bulkhead
 from mail_core.net.policy import NetworkSecurityError, OutboundSecurityPolicy
 from mail_core.net.proxy import ProxyConfig
@@ -85,7 +86,11 @@ def _resolve_ips(host: str, port: int, resolver: ResolverFn) -> list[str]:
         return [clean]
     except ValueError:
         pass
-    infos = resolver(clean, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    try:
+        infos = resolver(clean, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except BaseException as exc:
+        attach_failure_phase(exc, FailurePhase.DNS)
+        raise
     ips: list[str] = []
     seen: set[str] = set()
     for info in infos:
@@ -97,7 +102,7 @@ def _resolve_ips(host: str, port: int, resolver: ResolverFn) -> list[str]:
             seen.add(ip_str)
             ips.append(ip_str)
     if not ips:
-        raise OSError(f"no IP addresses resolved for host {host!r}")
+        raise attach_failure_phase(OSError(f"no IP addresses resolved for host {host!r}"), FailurePhase.DNS)
     return ips
 
 
@@ -116,7 +121,7 @@ def connect_ips_with_fallback(
     them with trailing local routing errors such as IPv6 ``ENETUNREACH``.
     """
     if not ips:
-        raise OSError("no IP addresses available to connect")
+        raise attach_failure_phase(OSError("no IP addresses available to connect"), FailurePhase.TCP_CONNECT)
     dial = connector or _default_connector
     mono = clock or time.monotonic
     ordered = sorted(ips, key=lambda ip: 1 if ":" in ip else 0)
@@ -150,6 +155,7 @@ def connect_ips_with_fallback(
     assert best_error is not None
     if secondary_errors and hasattr(best_error, "add_note"):
         best_error.add_note("secondary dial failures: " + "; ".join(secondary_errors[:4]))
+    attach_failure_phase(best_error, FailurePhase.TCP_CONNECT)
     raise best_error
 
 
@@ -169,18 +175,23 @@ def wrap_tls_socket(
                 sock.close()
             except Exception:
                 pass
-            raise TimeoutError(f"TLS handshake budget exhausted for {server_hostname!r}")
+            raise attach_failure_phase(
+                TimeoutError(f"TLS handshake budget exhausted for {server_hostname!r}"),
+                FailurePhase.TLS,
+                overwrite=True,
+            )
         if hasattr(sock, "settimeout"):
             sock.settimeout(remaining)
     ctx = ssl_context if ssl_context is not None else ssl.create_default_context()
     clean_sni = server_hostname.strip().strip("[]")
     try:
         return ctx.wrap_socket(sock, server_hostname=clean_sni)
-    except BaseException:
+    except BaseException as exc:
         try:
             sock.close()
         except Exception:
             pass
+        attach_failure_phase(exc, FailurePhase.TLS, overwrite=True)
         raise
 
 
@@ -223,16 +234,17 @@ def _dial_via_proxy(
     clock: Callable[[], float],
 ) -> Any:
     # Trusted operator proxy endpoints may reside on loopback/private networks.
-    proxy_ips = _resolve_ips(proxy.host, proxy.port, resolve)
-    sock = connect_ips_with_fallback(
-        proxy_ips,
-        proxy.port,
-        total_timeout=connect_timeout,
-        per_attempt_timeout=per_attempt_timeout,
-        connector=connector,
-        clock=clock,
-    )
+    sock: Any = None
     try:
+        proxy_ips = _resolve_ips(proxy.host, proxy.port, resolve)
+        sock = connect_ips_with_fallback(
+            proxy_ips,
+            proxy.port,
+            total_timeout=connect_timeout,
+            per_attempt_timeout=per_attempt_timeout,
+            connector=connector,
+            clock=clock,
+        )
         if proxy.scheme == "https":
             sock = wrap_tls_socket(
                 sock,
@@ -264,11 +276,9 @@ def _dial_via_proxy(
                 deadline=deadline,
                 clock=clock,
             )
-    except BaseException:
-        try:
-            sock.close()
-        except Exception:
-            pass
+    except BaseException as exc:
+        _close_quietly(sock)
+        attach_failure_phase(exc, FailurePhase.PROXY_CONNECT, overwrite=True)
         raise
     return sock
 
@@ -400,7 +410,15 @@ def dial_stream(
         target_host, int(target_port), proxy, policy, resolve
     )
     if active_bulkhead is not None:
-        active_bulkhead.before_dial(endpoint_key)
+        try:
+            active_bulkhead.before_dial(endpoint_key)
+        except BaseException as exc:
+            attach_failure_phase(
+                exc,
+                FailurePhase.PROXY_CONNECT if proxy is not None else FailurePhase.TCP_CONNECT,
+                overwrite=True,
+            )
+            raise
 
     deadline = mono() + resolved_connect_timeout
     try:

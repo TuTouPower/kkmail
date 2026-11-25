@@ -34,7 +34,7 @@ from mail_core.providers.connection_slots import (
 )
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
-from mail_core.security.redact import safe_provider_summary
+from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.sync.checkpoints import ScanGenerationMismatch, begin_scan_generation, invalidate_checkpoint_for_rebuild
 from mail_core.sync.execution import (
     OPEN_LINK_STATES,
@@ -601,7 +601,7 @@ def sync_folder_metadata(
                     payload={
                         "folder_id": str(folder_id),
                         "reason": "cursor_invalid",
-                        "detail": safe_provider_summary(exc),
+                        "detail": StructuredFailure.from_exception(exc).format(),
                         **_scan_context_payload(full, scan_generation, request_id),
                     },
                     priority=40,

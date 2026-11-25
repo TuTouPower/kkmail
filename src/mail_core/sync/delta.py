@@ -11,7 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
-from mail_core.sync.context import classify_failure, sync_request_payload
+from mail_core.mail.domain.failures import StructuredFailure
+from mail_core.sync.context import sync_request_payload
 from mail_core.mail.domain.enums import (
     ExecutionOrigin,
     JobStatus,
@@ -31,7 +32,6 @@ from mail_core.providers.connection_slots import (
 )
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
-from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.checkpoints import commit_checkpoint, invalidate_checkpoint_for_rebuild
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
@@ -473,7 +473,7 @@ def sync_folder_delta(
                             request_id,
                             folder_id=str(folder_id),
                             reason="cursor_invalid",
-                            detail=safe_provider_summary(exc),
+                            detail=StructuredFailure.from_exception(exc).format(),
                         ),
                         priority=40,
                         dedupe_key=f"metadata:{account_id}:{folder_id}",
@@ -558,17 +558,18 @@ def sync_folder_delta(
                 **totals,
             }
         except Exception as exc:
-            err_summary = safe_provider_summary(exc)
-            log.error("delta provider I/O failed for folder %s: %s", folder_id, err_summary)
+            failure = StructuredFailure.from_exception(exc)
+            err_summary = failure.format()
+            log.error("delta provider I/O failed for folder %s: %s", folder_id, failure)
             # No private successor: the Worker framework retries this same job
             # row with a counted failure and exponential backoff.
             with Session() as session:
                 _release_quiet(session)
                 session.commit()
-            classification = classify_failure(exc)
             result = {
                 "status": "provider_error",
-                "failure_code": classification.code,
+                "failure_code": failure.domain.value,
+                "failure": failure.to_dict(),
                 "error": err_summary,
                 "pages": pages,
                 **totals,

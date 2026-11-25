@@ -17,6 +17,7 @@ from mail_core.mail.domain.enums import (
     JobType,
     normalize_execution_origin,
 )
+from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.mail.storage.models import WorkerJob
 from mail_core.sync.context import coalesce_execution_origin
 
@@ -504,7 +505,7 @@ def reschedule_job(
     delay_seconds: float = 5.0,
     now: datetime | None = None,
     count_failure: bool = False,
-    error: BaseException | str | None = None,
+    error: StructuredFailure | BaseException | str | None = None,
 ) -> None:
     """Requeue a job on the same row (framework-owned retry).
 
@@ -562,10 +563,36 @@ def heartbeat_job_claim(
     return heartbeat_at if result.rowcount == 1 else None
 
 
+def _retry_after_delay(error: Any, default_delay: float) -> float:
+    if isinstance(error, StructuredFailure):
+        raw_retry: Any = error.retry_after_s
+    elif isinstance(error, BaseException):
+        raw_retry = StructuredFailure.from_exception(error).retry_after_s
+    else:
+        raw_retry = getattr(error, "retry_after_seconds", None)
+    if raw_retry is None:
+        return default_delay
+    try:
+        retry_after = float(raw_retry)
+        return max(default_delay, retry_after) if retry_after > 0 else default_delay
+    except (ValueError, TypeError):
+        return default_delay
+
+
+def _project_job_error(error: StructuredFailure | BaseException | str | None) -> str | None:
+    from mail_core.security.redact import safe_error
+
+    if isinstance(error, StructuredFailure):
+        return error.format() or None
+    if isinstance(error, BaseException):
+        return StructuredFailure.from_exception(error).format() or None
+    return safe_error(error) or None
+
+
 def fail_job(
     session: Session,
     job: WorkerJob,
-    error: BaseException | str,
+    error: StructuredFailure | BaseException | str | None,
     *,
     worker_id: str | None = None,
     max_attempts: int | None = None,
@@ -575,23 +602,15 @@ def fail_job(
     _assert_job_owner(job, worker_id)
     now = now or datetime.now(timezone.utc)
     cap = max_attempts if max_attempts is not None else _max_attempts()
-    from mail_core.security.redact import safe_error
 
-    job.last_error = safe_error(error) or None
+    job.last_error = _project_job_error(error)
     if hasattr(job, "failure_attempts"):
         failure_attempts = int(job.failure_attempts) + 1
     else:  # Compatibility for minimal job test doubles without the mapped field.
         failure_attempts = int(job.attempts)
     job.failure_attempts = failure_attempts
     if failure_attempts < cap:
-        delay = backoff_seconds(failure_attempts)
-        if hasattr(error, "retry_after_seconds") and getattr(error, "retry_after_seconds", None) is not None:
-            try:
-                retry_after = float(getattr(error, "retry_after_seconds"))
-                if retry_after > 0:
-                    delay = max(delay, retry_after)
-            except (ValueError, TypeError):
-                pass
+        delay = _retry_after_delay(error, backoff_seconds(failure_attempts))
         job.status = JobStatus.PENDING.value
         job.run_after = now + timedelta(seconds=delay)
         job.locked_by = None

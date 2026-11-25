@@ -1,0 +1,15 @@
+{
+  "tid": "t091",
+  "attempt": 1,
+  "execution_id": "f567b67772fc4fe9b877200109b63f30",
+  "status": "done",
+  "branch": "t091_typed_structured_failure_and_allowlist_diagnostics",
+  "base_sha": "917504e4e88bc804c133cac90481f1266fb82f7d",
+  "spec_source_sha": "b78e0e7724517dc1e101bbabb10ebe135dc75680",
+  "tests": "`./scripts/run-mail-core-tests.sh run` 全量 PG 套件 `2274 passed, 2 skipped`（覆盖率 `86%`）；`.venv/bin/pytest .repo_template/tests -q -m contract` `389 passed, 1 skipped`；`npm --prefix src/frontend test` `56 files / 597 passed`（含 `openapi:check`、`css:check`、`tsc -b`、`vite build`）；`npm --prefix src/desktop test` `22 passed`（4 个测试文件，vendor PG 与 OAuth 按设计跳过）；`scripts/export_openapi.py --check`（46 paths 匹配）；`scripts/check_doc_sensitive.py docs --check`（35 文件 0 违规）",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` `25 passed (32.8s)`",
+  "review": "Round 2 独立审查双通过（`review_code.md` `verdict: PASS`，0 blocking / 1 minor `t091_code_f005`→`p098`；`review_test.md` `verdict: PASS`，0 finding；`reviewed_scope: b575fc4300398750`、`ac_review=ok`、`review-status` `overall=PASS`）",
+  "review_scope": "b575fc4300398750",
+  "pending": [],
+  "findings": []
+}

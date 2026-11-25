@@ -32,6 +32,8 @@ _SOCKS5_ERRORS = {
 class ProxyTunnelError(ConnectionError):
     """Raised when a proxy rejects or corrupts tunnel establishment."""
 
+    failure_phase = "proxy_connect"
+
     def __init__(
         self,
         message: str,

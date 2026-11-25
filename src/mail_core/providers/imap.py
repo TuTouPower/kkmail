@@ -831,12 +831,22 @@ class ImapProvider:
         proxy_cfg = self._resolved_proxy()
         bh = self._effective_bulkhead()
         if bh is not None:
+            from mail_core.mail.domain.failures import FailurePhase, attach_failure_phase
+
             endpoint_key = (
                 proxy_cfg.safe_key() if proxy_cfg is not None else "direct",
                 self.host.strip().lower(),
                 int(self.port),
             )
-            bh.raise_if_open(endpoint_key)
+            try:
+                bh.raise_if_open(endpoint_key)
+            except BaseException as exc:
+                attach_failure_phase(
+                    exc,
+                    FailurePhase.PROXY_CONNECT if proxy_cfg is not None else FailurePhase.TCP_CONNECT,
+                    overwrite=True,
+                )
+                raise
 
         permit = acquire_permit(self.permit_factory, self.traffic_class)
         try:
@@ -935,12 +945,23 @@ class ImapProvider:
             or "INVALID CREDENTIALS" in upper_msg
         ) and not temporary_lockout
         if permanently_rejected:
+            from mail_core.mail.domain.failures import FailurePhase, attach_failure_phase
             from mail_core.providers.http import PermanentAuthError
 
-            raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc
+            raise attach_failure_phase(
+                PermanentAuthError(f"IMAP authentication rejected permanently: {msg}"),
+                FailurePhase.AUTH,
+                overwrite=True,
+            ) from exc
 
     def _connect(self) -> imaplib.IMAP4:
-        client = self._open_client(float(self.timeout))
+        from mail_core.mail.domain.failures import FailurePhase, attach_failure_phase
+
+        try:
+            client = self._open_client(float(self.timeout))
+        except BaseException as exc:
+            attach_failure_phase(exc, FailurePhase.IMAP)
+            raise
         sock = getattr(client, "sock", None)
         try:
             try:
@@ -952,10 +973,12 @@ class ImapProvider:
                     pass
             except imaplib.IMAP4.error as exc:
                 self._raise_if_permanent_auth_rejection(exc)
+                attach_failure_phase(exc, FailurePhase.IMAP)
                 raise
-        except BaseException:
+        except BaseException as exc:
             # A117: any login-phase failure (OSError/SSLError/timeout, not
             # just IMAP4.error) must close the socket before propagating.
+            attach_failure_phase(exc, FailurePhase.IMAP)
             if sock is not None:
                 try:
                     sock.close()
@@ -1799,12 +1822,27 @@ class ImapProvider:
                                                     remote_state=states_by_uid[u],
                                                 )
                 except Exception as exc:
-                    from mail_core.security.redact import safe_error
+                    from mail_core.mail.domain.failures import FailureDomain, StructuredFailure
+                    from mail_core.providers.connection_slots import is_capacity_error
 
-                    err_msg = f"IMAP operation group error: {safe_error(exc)}"
+                    if is_capacity_error(exc):
+                        raise
+                    failure = StructuredFailure.from_exception(exc)
+                    has_succeeded = any(res.success for res in results.values())
+                    is_transport_or_imap = (
+                        isinstance(exc, (TimeoutError, ConnectionError, OSError, ssl.SSLError, imaplib.IMAP4.error))
+                        or failure.domain is not FailureDomain.UNKNOWN
+                    )
+                    if not has_succeeded and is_transport_or_imap:
+                        raise
+                    err_text = failure.format()
                     for it in items:
                         if it[0] not in results:
-                            results[it[0]] = RemoteOperationResult(success=False, error=err_msg)
+                            results[it[0]] = RemoteOperationResult(
+                                success=False,
+                                error=err_text,
+                                failure=failure,
+                            )
         finally:
             self._close_client(c, _permit)
 
@@ -1907,7 +1945,14 @@ class ImapProvider:
                 # The reader thread blocks indefinitely; a finite socket
                 # timeout would poison the buffered reader (t061 spike).
                 sock.settimeout(None)
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, Exception):
+                from mail_core.providers.connection_slots import is_capacity_error
+
+                if not is_capacity_error(exc):
+                    from mail_core.mail.domain.failures import FailurePhase, attach_failure_phase
+
+                    attach_failure_phase(exc, FailurePhase.IMAP)
             sock = getattr(client, "sock", None)
             if sock is not None:
                 try:
