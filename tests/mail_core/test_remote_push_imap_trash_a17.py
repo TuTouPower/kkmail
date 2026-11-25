@@ -86,7 +86,7 @@ def test_imap_trash_fallback_resolves_real_folder_and_settles_done():
     provider.apply_remote_operations = _apply_batch  # type: ignore[method-assign]
 
     with patch.object(remote_push_mod, "build_provider", lambda *a, **k: provider):
-        result = remote_push_mod.push_remote_operations(account_id, worker_id="w-a17", store=object())
+        result = remote_push_mod.push_remote_operations(account_id, worker_id="w-a17", store=object(), execution_origin="foreground")
 
     assert result["status"] == "ok"
     assert result["pushed"] == 1, f"op must settle DONE, not loop back to PENDING: {result}"

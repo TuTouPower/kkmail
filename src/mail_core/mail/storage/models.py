@@ -22,7 +22,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from mail_core.db.base import Base
 from mail_core.mail.domain.enums import (
@@ -31,6 +31,7 @@ from mail_core.mail.domain.enums import (
     CredentialState,
     SyncActivity,
     SyncStatus,
+    normalize_execution_origin,
 )
 
 
@@ -443,12 +444,17 @@ class WorkerJob(Base):
     __table_args__ = (
         Index("ix_worker_jobs_claim", "status", "run_after", "priority"),
         Index("ix_worker_jobs_dedupe_active", "dedupe_key", unique=True, postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'claimed')")),
+        CheckConstraint(
+            "execution_origin IN ('foreground', 'background')",
+            name="ck_worker_jobs_execution_origin",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"))
     dedupe_key: Mapped[Optional[str]] = mapped_column(String(128))
+    execution_origin: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))
@@ -463,6 +469,10 @@ class WorkerJob(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+    @validates("execution_origin")
+    def _validate_execution_origin(self, _key: str, value: Any) -> str:
+        return normalize_execution_origin(value).value
 
 
 class MessageSearch(Base):

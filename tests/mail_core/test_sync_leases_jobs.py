@@ -39,8 +39,8 @@ def test_skip_locked_claim_exclusive():
     Session = get_session_factory()
     with Session() as s1:
         acc, _ = _account(s1)
-        enqueue_job(s1, job_type="sync_account_folders", account_id=acc.id)
-        enqueue_job(s1, job_type="sync_account_folders", account_id=acc.id)
+        enqueue_job(s1, job_type="sync_account_folders", account_id=acc.id, execution_origin="foreground")
+        enqueue_job(s1, job_type="sync_account_folders", account_id=acc.id, execution_origin="foreground")
         s1.commit()
         account_id = acc.id
 

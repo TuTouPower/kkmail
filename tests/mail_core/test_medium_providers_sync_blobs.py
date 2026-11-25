@@ -282,6 +282,7 @@ def test_complete_job_requires_owner():
         priority=100,
         account_id=None,
         job_type="sync_folder_delta",
+        execution_origin="foreground",
     )
     fake = _FakeSession()
     fake.scalar_result = job
@@ -528,7 +529,7 @@ def test_enqueue_account_sync_raises_when_disabled():
     mock_session.get.return_value = acc
 
     with pytest.raises(ValueError, match="account sync is disabled"):
-        enqueue_account_sync(mock_session, uuid.uuid4())
+        enqueue_account_sync(mock_session, uuid.uuid4(), execution_origin="foreground")
 
 
 def test_handle_job_skips_when_sync_disabled():
@@ -546,6 +547,7 @@ def test_handle_job_skips_when_sync_disabled():
         job_type=JobType.SYNC_FOLDER_DELTA.value,
         account_id=uuid.uuid4(),
         payload={"folder_id": str(uuid.uuid4())},
+        execution_origin="foreground",
     )
 
     with patch("mail_core.worker.handlers.complete_job") as mock_complete:

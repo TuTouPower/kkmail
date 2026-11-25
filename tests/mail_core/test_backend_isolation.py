@@ -25,7 +25,7 @@ def test_committed_data_starts_empty(iteration):
             AppSetting(key="isolation", value=str(iteration)),
             AuthCredential(id="default"),
             OutboxEvent(event_type="sync.progress", account_id=account.id, payload={}),
-            WorkerJob(job_type="sync_account_folders", account_id=account.id, payload={}),
+            WorkerJob(job_type="sync_account_folders", account_id=account.id, payload={}, execution_origin="foreground"),
         ])
         session.commit()
         # Keep A checked out while B observes the commit. Backend PIDs prove

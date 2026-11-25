@@ -154,7 +154,7 @@ def test_metadata_provider_error_releases_lease():
             account_id, folder_id = acc.id, folder.id
 
         with pytest.raises(RuntimeError, match="network down"):
-            sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
+            sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
 
         with Session() as session:
             lease = session.get(AccountSyncLease, account_id)
@@ -185,16 +185,16 @@ def test_delta_provider_error_releases_and_returns_status():
             account_id = acc.id
         from mail_core.sync import sync_account_folders
 
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"]
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"]
 
         def boom(folder_remote_id, cursor):
             raise ConnectionError("delta boom")
 
         provider.delta_changes = boom  # type: ignore[method-assign]
-        out = sync_folder_delta(account_id, folder_id, worker_id="w", store=store)
+        out = sync_folder_delta(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
         assert out["status"] == "provider_error"
         assert "ConnectionError" in out["error"]
 
@@ -254,10 +254,10 @@ def test_remote_push_isolates_per_op_errors():
             account_id = acc.id
         from mail_core.sync import sync_account_folders
 
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
+        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
 
         with Session() as session:
             enqueue_remote_operation(
@@ -276,7 +276,7 @@ def test_remote_push_isolates_per_op_errors():
             )
             session.commit()
 
-        result = push_remote_operations(account_id, worker_id="w", store=store)
+        result = push_remote_operations(account_id, worker_id="w", store=store, execution_origin="foreground")
         assert result["status"] == "ok"
         assert result["failed"] == 1
         assert result["pushed"] == 1
@@ -310,10 +310,10 @@ def test_reconcile_provider_error_releases_lease():
             account_id = acc.id
         from mail_core.sync import sync_account_folders
 
-        sync_account_folders(account_id, worker_id="w", store=store)
+        sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
+        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
 
         def boom(folder_remote_id, local_ids):
             raise RuntimeError("reconcile boom")
@@ -366,7 +366,7 @@ def test_metadata_heartbeats_between_pages(monkeypatch):
             session.add(folder)
             session.commit()
             account_id, folder_id = acc.id, folder.id
-        out = sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, max_pages=5)
+        out = sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, max_pages=5, execution_origin="foreground")
         assert out["status"] == "ok"
         assert out["pages"] >= 2
         assert heartbeats["n"] >= 2

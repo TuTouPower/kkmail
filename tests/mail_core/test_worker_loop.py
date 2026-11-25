@@ -263,10 +263,11 @@ def test_tick_reclaims_stale_and_isolates_job_sessions():
             attempts=1,
             priority=10,
             run_after=datetime.now(timezone.utc) - timedelta(minutes=30),
+            execution_origin="background",
         )
         session.add(stale)
-        j1 = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={}, priority=10)
-        j2 = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={}, priority=10)
+        j1 = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={}, priority=10, execution_origin="background")
+        j2 = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={}, priority=10, execution_origin="background")
         session.commit()
         stale_id, id1, id2 = stale.id, j1.id, j2.id
 
@@ -321,6 +322,7 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
             status=JobStatus.CLAIMED.value,
             locked_by="worker-failed",
             attempts=1,
+            execution_origin="foreground",
         )
         session.add(failed_job)
         session.commit()
@@ -387,6 +389,7 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
             attempts=1,
             failure_attempts=1,
             last_error="temporary provider outage",
+            execution_origin="foreground",
         )
         successful_job = WorkerJob(
             job_type=JobType.SYNC_FOLDER_DELTA.value,
@@ -395,6 +398,7 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
             status=JobStatus.CLAIMED.value,
             locked_by="worker-success",
             attempts=1,
+            execution_origin="foreground",
         )
         session.add_all([pending_error_job, successful_job])
         session.commit()
@@ -442,6 +446,7 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
             status=JobStatus.CLAIMED.value,
             locked_by="worker-auth",
             attempts=1,
+            execution_origin="foreground",
         )
         session.add(auth_job)
         session.commit()
@@ -473,6 +478,7 @@ def test_auxiliary_archive_failure_does_not_mark_account_sync_failed():
             status=JobStatus.CLAIMED.value,
             locked_by="worker-archive",
             attempts=1,
+            execution_origin="background",
         )
         session.add(job)
         session.commit()
@@ -495,7 +501,7 @@ def test_tick_failed_job_not_counted_as_handled():
 
     from mail_core.mail.storage.models import WorkerJob
 
-    job = WorkerJob(job_type="no_such_type_xyz", payload={}, status="claimed")
+    job = WorkerJob(job_type="no_such_type_xyz", payload={}, status="claimed", execution_origin="foreground")
     job.id = uuid.uuid4()
     job.locked_by = "w-fail-count"
 
@@ -545,6 +551,7 @@ def test_handle_job_sanitizes_error_in_connectivity_failure():
         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
         status="claimed",
         payload={"account_id": str(account_id)},
+        execution_origin="foreground",
     )
     job.id = uuid.uuid4()
     # Account status is only marked failed on a terminal non-transient
@@ -589,6 +596,7 @@ def test_handle_job_resolves_credential_store_inside_job_error_boundary():
         job_type=JobType.REMOTE_OPERATION_PUSH.value,
         status="claimed",
         payload={},
+        execution_origin="foreground",
     )
     job.id = uuid.uuid4()
     session = MagicMock()
@@ -610,7 +618,7 @@ def test_handle_job_skips_credential_store_for_outbox_wake():
     from mail_core.mail.storage.models import WorkerJob
     from mail_core.worker.handlers import handle_job
 
-    job = WorkerJob(job_type=JobType.OUTBOX_DISPATCH_WAKE.value, status="claimed", payload={})
+    job = WorkerJob(job_type=JobType.OUTBOX_DISPATCH_WAKE.value, status="claimed", payload={}, execution_origin="background")
     job.id = uuid.uuid4()
     session = MagicMock()
 
@@ -662,6 +670,7 @@ def test_evaluate_result_retains_business_payload_for_followup():
         },
         priority=5,
         dedupe_key="dedupe-123",
+        execution_origin="foreground",
     )
     job.id = uuid.uuid4()
 
@@ -701,6 +710,7 @@ def test_complete_job_retains_business_payload_for_atomic_successor():
         priority=50,
         dedupe_key="dedupe-123",
         locked_by="test-worker",
+        execution_origin="foreground",
     )
     job.id = job_id
 
@@ -773,6 +783,7 @@ def test_auth_failure_job_completes_and_resets_sync_activity():
             status=JobStatus.CLAIMED.value,
             locked_by="w-auth",
             attempts=1,
+            execution_origin="foreground",
         )
         session.add(job)
         session.flush()

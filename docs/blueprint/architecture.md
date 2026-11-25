@@ -129,7 +129,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
     - 传输层网络抖动、超时与限流只作用于 `connectivity_state`，不得污染凭据态，也不外溢为账号认证失败或侧栏全局报警；后台静默同步故障同理不外溢。连接态熔断以连续 5 次失败且跨越 5 分钟窗口为阈值才置 `unreachable`，任一次链路成功即复位 `connected`，单次抖动只置 `degraded`。
     - Folder 级 `folders.sync_status`（`paused` / `idle`）仅用于物理 mailbox（`kind=container`）；派生视图（`kind=view`）没有暂停语义，账号健康状态变更不得触碰文件夹状态。
 2. **Worker 统一重试调度**：
-    - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`resolve_sync_context` 在顶层注入 `background` 标记，`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排，周期任务 payload 统一携带 `background`。
+    - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`WorkerJob.execution_origin`（`foreground` / `background` 非空持久化列，迁移 `20261125_0006`）作为任务执行血缘一等公民——`enqueue_job` 强制显式声明并在 `complete_job` / `reschedule_job` / `delta` / `engine` / `remote_push` 中自动继承，`resolve_sync_context` 直接依据该列结合 `SyncRequest.scope` fail-closed 裁决后台隔离（不再依赖自由 payload `"background"` 猜测），`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排。
     - 失败是否影响账号健康状态由 Worker 框架集中裁定：后台静默任务失败不触发侧栏全局报警，认证类失败才更新 `credential_state`，链路类失败累计到熔断阈值才更新 `connectivity_state`，同步任务在途状态仅由 `sync_activity` 反映；凭据态与连接态始终正交，不因单次抖动互相污染。
 
 ## 同步请求完成判定：真实工作驱动 (t082)

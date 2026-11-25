@@ -80,7 +80,7 @@ def _run(monkeypatch, harness):
         return SimpleNamespace(status="pending")
 
     monkeypatch.setattr(engine, "enqueue_job", _enqueue)
-    return engine.sync_account_folders(harness.account.id, worker_id="w-t086", store=object())
+    return engine.sync_account_folders(harness.account.id, worker_id="w-t086", store=object(), execution_origin="foreground")
 
 
 def _gmail_account():

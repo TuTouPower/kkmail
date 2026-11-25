@@ -9,6 +9,7 @@ Account health is derived only from that structure.
 from __future__ import annotations
 
 import errno
+import logging
 import ssl
 import uuid
 from dataclasses import dataclass
@@ -17,7 +18,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from mail_core.mail.domain.enums import ExecutionOrigin, normalize_execution_origin
 from mail_core.mail.storage.models import SyncRequest
+
+log = logging.getLogger(__name__)
 
 _NETWORK_ERRNOS = frozenset(
     value
@@ -51,34 +55,71 @@ def _coerce_uuid(value: Any) -> uuid.UUID | None:
         return None
 
 
-def sync_context_payload(request_id: uuid.UUID | str | None = None, **extra: Any) -> dict[str, Any]:
+def sync_request_payload(request_id: uuid.UUID | str | None = None, **extra: Any) -> dict[str, Any]:
+    """Build non-lineage request/target correlation fields for a job payload."""
     payload = {key: value for key, value in extra.items() if value is not None}
     if request_id is not None:
         payload["request_id"] = str(request_id)
     return payload
 
 
-def resolve_sync_context(session: Session, job: Any) -> tuple[bool, uuid.UUID | None]:
-    """Resolve whether a job belongs to a background (silent) sync.
+def coalesce_execution_origin(
+    current: ExecutionOrigin | str,
+    incoming: ExecutionOrigin | str,
+) -> ExecutionOrigin:
+    """Merge execution origins when jobs coalesce; explicit foreground takes precedence."""
+    left = normalize_execution_origin(current)
+    right = normalize_execution_origin(incoming)
+    if left is ExecutionOrigin.FOREGROUND or right is ExecutionOrigin.FOREGROUND:
+        return ExecutionOrigin.FOREGROUND
+    return ExecutionOrigin.BACKGROUND
 
-    Background lineage is expressed either by an explicit top-level
-    ``background`` marker (periodic/silent jobs) or by a ``SyncRequest`` whose
-    scope carries ``background: True``.  A job with neither is foreground.
+
+def resolve_sync_context(session: Session, job: Any) -> tuple[bool, uuid.UUID | None]:
+    """Resolve background lineage from ``WorkerJob.execution_origin`` + ``SyncRequest.scope``.
+
+    Execution origin lives on the typed ``WorkerJob.execution_origin`` column
+    (never guessed from free-form ``payload["background"]``). If the linked
+    ``SyncRequest.scope`` also declares ``background: True``, account health
+    isolation fails closed to background even if an upstream caller drifted.
     """
+    raw_origin = getattr(job, "execution_origin", None)
+    if raw_origin is None:
+        raise ValueError("worker job missing execution_origin")
+    origin = normalize_execution_origin(raw_origin)
 
     payload = getattr(job, "payload", None)
-    if not isinstance(payload, dict):
-        return False, None
-    if bool(payload.get("background")):
-        return True, None
-    request_id = _coerce_uuid(payload.get("request_id") or payload.get("parent_request_id"))
-    if request_id is None:
-        return False, None
-    req = session.get(SyncRequest, request_id)
-    if req is None:
-        return False, request_id
-    scope = req.scope if isinstance(req.scope, dict) else {}
-    return bool(scope.get("background")), request_id
+    request_id = (
+        _coerce_uuid(payload.get("request_id") or payload.get("parent_request_id"))
+        if isinstance(payload, dict)
+        else None
+    )
+    req_background = False
+    if request_id is not None:
+        req = session.get(SyncRequest, request_id)
+        if req is not None and isinstance(req.scope, dict):
+            req_background = bool(req.scope.get("background"))
+
+    if origin is ExecutionOrigin.BACKGROUND:
+        return True, request_id
+    if req_background:
+        log.warning(
+            "worker job %s has execution_origin=%s while linked SyncRequest %s scope.background=True; enforcing background isolation",
+            getattr(job, "id", "<unknown>"),
+            origin.value,
+            request_id,
+        )
+        return True, request_id
+    return False, request_id
+
+
+def execution_origin_for_job(session: Session, job: Any) -> tuple[ExecutionOrigin, uuid.UUID | None]:
+    """Return typed ``ExecutionOrigin`` plus linked ``request_id`` for a worker job."""
+    is_background, request_id = resolve_sync_context(session, job)
+    return (
+        ExecutionOrigin.BACKGROUND if is_background else ExecutionOrigin.FOREGROUND,
+        request_id,
+    )
 
 
 class FailureDomain(StrEnum):

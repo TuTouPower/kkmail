@@ -36,6 +36,7 @@ def test_evaluate_result_completes_job_when_retry_is_already_scheduled():
         payload={"folder_id": str(uuid.uuid4())},
         status=JobStatus.CLAIMED.value,
         locked_by="retry-worker",
+        execution_origin="foreground",
     )
     job.id = uuid.uuid4()
     session = MagicMock()
@@ -71,6 +72,7 @@ def test_evaluate_result_still_fails_without_a_scheduled_followup():
         payload={"folder_id": str(uuid.uuid4())},
         status=JobStatus.CLAIMED.value,
         locked_by="retry-worker",
+        execution_origin="foreground",
     )
     job.id = uuid.uuid4()
     session = MagicMock()
@@ -125,6 +127,7 @@ def test_delta_provider_error_requeues_same_job_with_counted_failure(monkeypatch
             locked_by="retry-worker",
             attempts=1,
             dedupe_key=f"delta:{account_id}:{folder_id}",
+            execution_origin="foreground",
         )
         session.add(job)
         session.commit()
@@ -185,8 +188,8 @@ def test_delta_and_metadata_lease_busy_results_mark_existing_retries():
         session.commit()
 
     store = object()
-    delta_result = sync_folder_delta(account_id, folder_id, worker_id="delta-worker", store=store)
-    metadata_result = sync_folder_metadata(account_id, folder_id, worker_id="metadata-worker", store=store)
+    delta_result = sync_folder_delta(account_id, folder_id, worker_id="delta-worker", store=store, execution_origin="foreground")
+    metadata_result = sync_folder_metadata(account_id, folder_id, worker_id="metadata-worker", store=store, execution_origin="foreground")
 
     assert delta_result["status"] == "lease_busy"
     assert delta_result["followup_scheduled"] is True
@@ -228,6 +231,7 @@ def test_claimed_sync_job_coalesces_lease_busy_followup(job_type, key_prefix):
             locked_by=worker_id,
             attempts=1,
             dedupe_key=dedupe_key,
+            execution_origin="foreground",
         )
         session.add(job)
         session.commit()
@@ -280,9 +284,9 @@ def test_page_followups_use_job_type_dedupe_key(monkeypatch, sync_path, exhauste
     monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None, **kwargs: provider)
     monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None, **kwargs: provider)
     if sync_path == "metadata":
-        result = sync_folder_metadata(account_id, folder_id, worker_id="page-followup", store=object(), max_pages=1)
+        result = sync_folder_metadata(account_id, folder_id, worker_id="page-followup", store=object(), max_pages=1, execution_origin="foreground")
     else:
-        result = sync_folder_delta(account_id, folder_id, worker_id="page-followup", store=object(), max_pages=1)
+        result = sync_folder_delta(account_id, folder_id, worker_id="page-followup", store=object(), max_pages=1, execution_origin="foreground")
     assert result["status"] == "ok"
     assert result["exhausted"] is exhausted
 
@@ -309,7 +313,7 @@ def test_delta_cursor_invalid_marks_metadata_rebuild_as_scheduled(monkeypatch):
             raise CursorInvalidError("cursor expired")
 
     monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None, **kwargs: InvalidCursorProvider())
-    result = sync_folder_delta(account_id, folder_id, worker_id="delta-worker", store=object())
+    result = sync_folder_delta(account_id, folder_id, worker_id="delta-worker", store=object(), execution_origin="foreground")
 
     assert result["status"] == "cursor_invalid"
     assert result["followup_scheduled"] is True
@@ -336,7 +340,7 @@ def test_metadata_cursor_invalid_marks_rebuild_as_scheduled(monkeypatch):
             raise CursorInvalidError("cursor expired")
 
     monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None, **kwargs: InvalidCursorProvider())
-    result = sync_folder_metadata(account_id, folder_id, worker_id="metadata-worker", store=object())
+    result = sync_folder_metadata(account_id, folder_id, worker_id="metadata-worker", store=object(), execution_origin="foreground")
 
     assert result["status"] == "cursor_invalid"
     assert result["followup_scheduled"] is True
@@ -389,6 +393,7 @@ def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monke
                 status=JobStatus.CLAIMED.value,
                 locked_by="worker-noselect",
                 attempts=1,
+                execution_origin="foreground",
             )
             for job_type in (
                 JobType.SYNC_FOLDER_METADATA,
@@ -418,7 +423,7 @@ def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monke
 
     monkeypatch.setattr(delta_mod, "build_provider", unexpected_provider)
     monkeypatch.setattr(reconcile_mod, "build_provider", unexpected_provider)
-    result = sync_account_folders(account_id, worker_id="worker-noselect", store=object())
+    result = sync_account_folders(account_id, worker_id="worker-noselect", store=object(), execution_origin="foreground")
     assert result["status"] == "ok"
 
     with Session() as session:
@@ -526,8 +531,8 @@ def test_folder_discovery_pauses_missing_remote_and_deduplicates_metadata_job(mo
             return [RemoteFolder("INBOX", "INBOX", "inbox")]
 
     monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None, **kwargs: ListingProvider())
-    sync_account_folders(account_id, worker_id="folders-test", store=object())
-    sync_account_folders(account_id, worker_id="folders-test", store=object())
+    sync_account_folders(account_id, worker_id="folders-test", store=object(), execution_origin="foreground")
+    sync_account_folders(account_id, worker_id="folders-test", store=object(), execution_origin="foreground")
 
     with Session() as session:
         missing = session.get(Folder, missing_id)

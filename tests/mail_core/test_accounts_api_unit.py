@@ -256,13 +256,15 @@ def test_sync_all_keyset_collects_then_enqueues_in_single_commit(monkeypatch):
     import uuid
 
     import mail_core.mail.application.accounts as accounts_app
+    from mail_core.mail.domain.enums import ExecutionOrigin
 
     ids = [uuid.UUID(int=index + 1) for index in range(105)]
     pages = [ids[:50], ids[50:100], ids[100:]]
     session = _sync_all_fake_session(pages)
     enqueued = []
 
-    def enqueue(_session, account_id):
+    def enqueue(_session, account_id, *, execution_origin):
+        assert execution_origin == ExecutionOrigin.FOREGROUND
         enqueued.append(account_id)
         return uuid.UUID(int=account_id.int + 1_000)
 
@@ -291,11 +293,13 @@ def test_sync_all_enqueue_failure_rolls_back_without_any_commit(monkeypatch):
     import pytest
 
     import mail_core.mail.application.accounts as accounts_app
+    from mail_core.mail.domain.enums import ExecutionOrigin
 
     ids = [uuid.UUID(int=index + 1) for index in range(3)]
     session = _sync_all_fake_session([ids])
 
-    def enqueue(_session, account_id):
+    def enqueue(_session, account_id, *, execution_origin):
+        assert execution_origin == ExecutionOrigin.FOREGROUND
         if account_id == ids[1]:
             raise RuntimeError("enqueue boom")
         return uuid.UUID(int=account_id.int + 1_000)

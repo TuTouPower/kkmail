@@ -76,7 +76,7 @@ def test_successful_move_persists_provider_remote_identity_and_location(monkeypa
     account_id, message_id, source_id, destination_id, operation_id, store = _seed_move_operation()
     monkeypatch.setattr(remote_push, "build_provider", lambda _account, _store=None, **kwargs: MoveProvider(success=True))
 
-    result = remote_push.push_remote_operations(account_id, worker_id="move-test", store=store, limit=1)
+    result = remote_push.push_remote_operations(account_id, worker_id="move-test", store=store, limit=1, execution_origin="foreground")
 
     assert result["status"] == "ok"
     assert result["pushed"] == 1
@@ -117,7 +117,7 @@ def test_failed_move_does_not_apply_provider_remote_state(monkeypatch):
     account_id, message_id, source_id, _destination_id, operation_id, store = _seed_move_operation()
     monkeypatch.setattr(remote_push, "build_provider", lambda _account, _store=None, **kwargs: MoveProvider(success=False))
 
-    result = remote_push.push_remote_operations(account_id, worker_id="move-test", store=store, limit=1)
+    result = remote_push.push_remote_operations(account_id, worker_id="move-test", store=store, limit=1, execution_origin="foreground")
 
     assert result["status"] == "ok"
     assert result["failed"] == 1

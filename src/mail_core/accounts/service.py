@@ -11,7 +11,13 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import JobType, ProviderType, SyncActivity
+from mail_core.mail.domain.enums import (
+    ExecutionOrigin,
+    JobType,
+    ProviderType,
+    SyncActivity,
+    normalize_execution_origin,
+)
 from mail_core.mail.storage.models import Account, AccountGroup
 from mail_core.security.credentials import get_credential_store, save_json_secret
 from mail_core.sync.jobs import enqueue_job
@@ -224,7 +230,14 @@ def delete_account(session: Session, account_id: uuid.UUID) -> None:
             store.delete_secret(ref)
 
 
-def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:
+def enqueue_account_sync(
+    session: Session,
+    account_id: uuid.UUID,
+    *,
+    execution_origin: ExecutionOrigin | str,
+) -> uuid.UUID:
+    """Enqueue an account sync job with explicit execution lineage."""
+    origin = normalize_execution_origin(execution_origin)
     acc = session.get(Account, account_id)
     if acc is None:
         raise LookupError("account not found")
@@ -233,6 +246,7 @@ def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:
     job = enqueue_job(
         session,
         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+        execution_origin=origin,
         account_id=account_id,
         payload={},
         priority=50,

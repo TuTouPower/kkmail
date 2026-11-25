@@ -28,6 +28,7 @@ from mail_core.accounts.oauth_flow import (
 )
 from mail_core.api.accounts import AccountOut
 from mail_core.api.deps import require_auth
+from mail_core.mail.domain.enums import ExecutionOrigin
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.accounts import create_account_app, update_account_app
 from mail_core.mail.storage.models import Account, AccountGroup
@@ -146,7 +147,7 @@ def _ensure_group_exists(group_id: UUID) -> None:
 def _enqueue_sync_best_effort(account_id: UUID) -> None:
     try:
         with get_session_factory()() as session:
-            enqueue_account_sync(session, account_id)
+            enqueue_account_sync(session, account_id, execution_origin=ExecutionOrigin.FOREGROUND)
             session.commit()
     except Exception as exc:  # sync is queued again on demand; never fail the save
         log.warning("initial sync enqueue failed for account %s: %s", account_id, safe_error(exc))

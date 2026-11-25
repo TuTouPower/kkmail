@@ -86,6 +86,7 @@ def test_capacity_coalesced_followup_survives_settlement():
                 run_after=_NOW,
                 created_at=_NOW,
                 updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.add(
@@ -104,7 +105,8 @@ def test_capacity_coalesced_followup_survives_settlement():
 
     with patch.object(remote_push_mod, "build_provider", lambda *a, **k: _CapacityProvider()):
         result = remote_push_mod.push_remote_operations(
-            account_id, worker_id=_WORKER, store=object()
+            account_id, worker_id=_WORKER, store=object(),
+            execution_origin="foreground",
         )
 
     assert result["status"] == "capacity_unavailable"

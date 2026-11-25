@@ -25,6 +25,7 @@ def test_invalid_folder_sync_payload_fails_without_changing_account_status(job_t
         job_type=job_type,
         status="claimed",
         payload=payload,
+        execution_origin="foreground",
     )
     job.id = uuid.uuid4()
     job.locked_by = "worker-invalid-payload"

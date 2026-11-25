@@ -19,9 +19,10 @@ from mail_core.accounts.health import (
 from mail_core.sync.context import (
     AccountFailureKind,
     account_failure_kind,
-    resolve_sync_context as _resolve_sync_context,
+    execution_origin_for_job,
+    resolve_sync_context,
 )
-from mail_core.mail.domain.enums import JobStatus, JobType
+from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType
 from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.security.credentials import get_credential_store
 from mail_core.providers.connection_slots import (
@@ -167,7 +168,7 @@ def _apply_account_health(session: Session, job: WorkerJob, result: Any) -> None
     if job.account_id is None or job.job_type not in _ACCOUNT_SYNC_JOB_TYPES:
         return
     status = result.get("status") if isinstance(result, dict) else None
-    is_background, _ = _resolve_sync_context(session, job)
+    is_background, _ = resolve_sync_context(session, job)
 
     if status == "ok":
         record_connectivity_success(session, job.account_id)
@@ -283,7 +284,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
     # in the same worker process do not collide or invalidate each other's lease/claims.
     execution_owner = f"{worker_id}:{job.id}"
 
-    is_background, _ = _resolve_sync_context(session, job)
+    execution_origin, _ = execution_origin_for_job(session, job)
     if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES:
         set_sync_activity(session, account_id, active=True)
     try:
@@ -317,7 +318,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 full=bool(payload.get("full")),
-                background=is_background,
+                execution_origin=execution_origin,
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
             )
@@ -340,6 +341,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 full=bool(payload.get("full")),
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
+                execution_origin=execution_origin,
                 # t074: requeues inside keep this job's priority.
                 priority=job.priority,
             )
@@ -363,7 +365,13 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.remote_push import push_remote_operations
 
             session.commit()
-            result = push_remote_operations(account_id, worker_id=execution_owner, store=get_credential_store(), traffic_class=traffic_class)
+            result = push_remote_operations(
+                account_id,
+                worker_id=execution_owner,
+                store=get_credential_store(),
+                traffic_class=traffic_class,
+                execution_origin=execution_origin,
+            )
             log.info("remote_operation_push %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
@@ -408,6 +416,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 # t074: requeues inside keep this job's priority.
                 priority=job.priority,
                 request_id=_uuid_or_none(payload.get("request_id")),
+                execution_origin=execution_origin,
             )
             log.info("sync_folder_delta %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)

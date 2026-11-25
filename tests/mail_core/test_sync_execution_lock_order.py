@@ -48,6 +48,7 @@ def _seed_request(Session, *, link_status: str):
                 run_after=_NOW,
                 created_at=_NOW,
                 updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.flush()

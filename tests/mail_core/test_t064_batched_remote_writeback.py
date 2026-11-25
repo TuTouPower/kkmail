@@ -332,7 +332,7 @@ def test_ac008_concurrent_mutation_requeues_pending():
     fake_provider.apply_remote_operations.side_effect = fake_apply
 
     with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
-        res = push_remote_operations(aid, worker_id="w-cas", store=DictCredentialStore({"r": "x"}))
+        res = push_remote_operations(aid, worker_id="w-cas", store=DictCredentialStore({"r": "x"}), execution_origin="foreground")
 
     assert res["status"] == "ok"
     assert res["pushed"] == 0
@@ -373,7 +373,7 @@ def test_ac009_fencing_loss_keeps_in_progress():
     fake_provider.apply_remote_operations.side_effect = fake_apply
 
     with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
-        res = push_remote_operations(aid, worker_id="w-fence", store=DictCredentialStore({"r": "x"}))
+        res = push_remote_operations(aid, worker_id="w-fence", store=DictCredentialStore({"r": "x"}), execution_origin="foreground")
 
     assert res["status"] == "fencing_mismatch"
 
@@ -406,7 +406,7 @@ def test_ac012_large_batch_over_500_processes_first_and_enqueues_followup():
     ]
 
     with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
-        res = push_remote_operations(aid, worker_id="w-500", store=DictCredentialStore({"r": "x"}), limit=500)
+        res = push_remote_operations(aid, worker_id="w-500", store=DictCredentialStore({"r": "x"}), limit=500, execution_origin="foreground")
 
     assert res["status"] == "ok"
     assert res["pushed"] == 500
@@ -552,7 +552,7 @@ def test_rate_limit_and_transient_failure_schedules_delayed_followup_job():
     ]
 
     with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
-        res = push_remote_operations(acc_id, worker_id="worker-retry-test", store=store)
+        res = push_remote_operations(acc_id, worker_id="worker-retry-test", store=store, execution_origin="foreground")
         assert res["status"] == "ok"
         assert res["failed"] == 1
 
@@ -580,7 +580,7 @@ def test_rate_limit_and_transient_failure_schedules_delayed_followup_job():
         s.commit()
 
     with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
-        res = push_remote_operations(acc_id, worker_id="worker-retry-test", store=store)
+        res = push_remote_operations(acc_id, worker_id="worker-retry-test", store=store, execution_origin="foreground")
         assert res["status"] == "ok"
         assert res["pushed"] == 0
         assert res["failed"] == 0
@@ -703,7 +703,7 @@ def test_remote_push_heartbeats_lease_between_large_chunks():
 
     with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
         with patch("mail_core.sync.remote_push.heartbeat_lease", side_effect=tracking_hb):
-            res = push_remote_operations(acc_id, worker_id="worker-hb-test", store=store, limit=120)
+            res = push_remote_operations(acc_id, worker_id="worker-hb-test", store=store, limit=120, execution_origin="foreground")
             assert res["status"] == "ok"
             assert res["pushed"] == 120
             # 1 initial pre-network HB + at least 1 between-chunks HB

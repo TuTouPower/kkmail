@@ -73,6 +73,7 @@ def test_ac003_delta_exhausted_no_longer_self_schedules():
             acc_id,
             folder_id,
             worker_id="test-worker",
+            execution_origin="foreground",
         )
 
     assert result["status"] == "ok"
@@ -129,6 +130,7 @@ def test_ac004_and_ac005_delta_upsert_enqueues_archive_and_persists_body():
             acc_id,
             folder_id,
             worker_id="test-worker",
+            execution_origin="foreground",
         )
 
     assert result["status"] == "ok"

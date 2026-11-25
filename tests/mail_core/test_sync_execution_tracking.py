@@ -309,6 +309,7 @@ def test_delta_binds_inflight_initialization_scan():
             payload={"folder_id": str(folder_id)},
             priority=50,
             dedupe_key=f"metadata:{account_id}:{folder_id}",
+            execution_origin="foreground",
         )
         session.commit()
 
@@ -416,18 +417,21 @@ def test_full_scan_same_generation_retry_continues_cursor_and_old_generation_is_
         result = sync_folder_metadata(
             account_id, folder_id, worker_id=WORKER, store=object(),
             full=True, scan_generation=gen1, max_pages=1,
+            execution_origin="foreground",
         )
         assert result["status"] == "ok"
         # Same generation retry continues from the stored cursor (no reset).
         result = sync_folder_metadata(
             account_id, folder_id, worker_id=WORKER, store=object(),
             full=True, scan_generation=gen1, max_pages=1,
+            execution_origin="foreground",
         )
         assert result["status"] == "ok"
         # A new generation resets again.
         result = sync_folder_metadata(
             account_id, folder_id, worker_id=WORKER, store=object(),
             full=True, scan_generation=gen2, max_pages=1,
+            execution_origin="foreground",
         )
         assert result["status"] == "ok"
     assert seen[0] == {}  # gen1 first entry: reset from uid_next=500
@@ -463,6 +467,7 @@ def test_failed_metadata_folder_gets_no_reconcile():
             sync_folder_metadata(
                 account_id, folder_id, worker_id=WORKER, store=object(),
                 full=True, scan_generation=uuid.uuid4(),
+                execution_origin="foreground",
             )
 
     Session = get_session_factory()

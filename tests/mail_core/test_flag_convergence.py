@@ -122,7 +122,7 @@ def test_rapid_offline_toggling_coalesces_to_latest_state():
             assert msg.is_flagged is True
 
         # Now reconnect / push to remote provider
-        res = push_remote_operations(acc_id, worker_id="worker-conv", store=store)
+        res = push_remote_operations(acc_id, worker_id="worker-conv", store=store, execution_origin="foreground")
         assert res["status"] == "ok"
         assert res["pushed"] == 2
 
@@ -174,7 +174,7 @@ def test_idempotent_repeated_mutations_merge_cleanly():
             assert read_ops[0].desired_state.get("is_read") is True
             assert read_ops[0].desired_state.get("revision") == 4
 
-        res = push_remote_operations(acc_id, worker_id="worker-idem", store=store)
+        res = push_remote_operations(acc_id, worker_id="worker-idem", store=store, execution_origin="foreground")
         assert res["status"] == "ok"
         assert res["pushed"] == 1
         assert provider.messages["INBOX"][0].is_read is True
@@ -214,7 +214,7 @@ def test_concurrent_in_flight_mutation_cas_protection():
         # Step 3: Run push. The worker pushes the claimed revision 1 (is_read=True),
         # but CAS detects that the operation row was modified concurrently to revision 2 (is_read=False).
         # It must preserve PENDING without overwriting the newer state with DONE.
-        res = push_remote_operations(acc_id, worker_id="worker-cas", store=store)
+        res = push_remote_operations(acc_id, worker_id="worker-cas", store=store, execution_origin="foreground")
         assert res["status"] == "ok"
         # Since CAS triggered, pushed count in this round is 0
         assert res["pushed"] == 0
@@ -231,7 +231,7 @@ def test_concurrent_in_flight_mutation_cas_protection():
 
         # Step 4: Restore normal apply and push again
         provider.apply_remote_operation = original_apply
-        res2 = push_remote_operations(acc_id, worker_id="worker-cas", store=store)
+        res2 = push_remote_operations(acc_id, worker_id="worker-cas", store=store, execution_origin="foreground")
         assert res2["status"] == "ok"
         assert res2["pushed"] == 1
 
@@ -270,7 +270,7 @@ def test_network_failure_transient_retry_and_recovery():
 
         provider.apply_remote_operation = _failing_apply
 
-        res = push_remote_operations(acc_id, worker_id="worker-net", store=store)
+        res = push_remote_operations(acc_id, worker_id="worker-net", store=store, execution_origin="foreground")
         assert res["status"] == "ok"
         assert res["pushed"] == 0
 
@@ -296,7 +296,7 @@ def test_network_failure_transient_retry_and_recovery():
         _restore_push_provider(orig)
         orig = _patch_push_provider(real_provider)
 
-        res2 = push_remote_operations(acc_id, worker_id="worker-net", store=store)
+        res2 = push_remote_operations(acc_id, worker_id="worker-net", store=store, execution_origin="foreground")
         assert res2["status"] == "ok"
         assert res2["pushed"] == 1
 
@@ -341,7 +341,7 @@ def test_stale_in_progress_reclaim_and_idempotent_push():
             session.commit()
 
         # push_remote_operations automatically runs reclaim_stale_in_progress at start
-        res = push_remote_operations(acc_id, worker_id="worker-reclaim", store=store)
+        res = push_remote_operations(acc_id, worker_id="worker-reclaim", store=store, execution_origin="foreground")
         assert res["status"] == "ok"
         assert res["pushed"] == 1
 

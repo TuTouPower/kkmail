@@ -6,10 +6,13 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from mail_core.accounts import health
 from mail_core.mail.domain.enums import (
     ConnectivityState,
     CredentialState,
+    ExecutionOrigin,
     JobStatus,
     SyncActivity,
 )
@@ -215,17 +218,28 @@ def test_failure_classification_ignores_free_text():
     assert classify_failure(TimeoutError("timed out")).domain is FailureDomain.TRANSPORT
 
 
-def test_resolve_sync_context_reads_top_level_background_marker():
+def test_resolve_sync_context_uses_typed_column_and_ignores_payload_marker():
+    """t090: replaces legacy payload['background'] shim test.
+
+    Execution lineage is stored exclusively in WorkerJob.execution_origin;
+    without a linked request_id, resolving a WorkerJob requires no DB lookup
+    and payload['background'] cannot spoof foreground into background.
+    """
+
     class _NoDbSession:
         def get(self, *_args, **_kwargs):
-            raise AssertionError("top-level background marker must not hit the DB")
+            raise AssertionError("column-based lineage without request_id must not hit the DB")
 
     assert resolve_sync_context(
-        _NoDbSession(), SimpleNamespace(payload={"background": True})
+        _NoDbSession(),
+        SimpleNamespace(execution_origin=ExecutionOrigin.BACKGROUND, payload={}),
     ) == (True, None)
     assert resolve_sync_context(
-        _NoDbSession(), SimpleNamespace(payload={"background": False})
-    )[0] is False
+        _NoDbSession(),
+        SimpleNamespace(execution_origin=ExecutionOrigin.FOREGROUND, payload={"background": True}),
+    ) == (False, None)
+    with pytest.raises(ValueError, match="execution_origin"):
+        resolve_sync_context(_NoDbSession(), SimpleNamespace(payload={"background": True}))
 
 
 def test_reschedule_job_count_failure_keeps_id_and_counts_failure():

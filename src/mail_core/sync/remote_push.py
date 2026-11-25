@@ -11,7 +11,14 @@ from sqlalchemy import and_, func, or_, select
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
-from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, RemoteOperationStatus
+from mail_core.mail.domain.enums import (
+    ExecutionOrigin,
+    JobStatus,
+    JobType,
+    OutboxEventType,
+    RemoteOperationStatus,
+    normalize_execution_origin,
+)
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, RemoteOperation
 from mail_core.providers.connection_slots import (
@@ -201,6 +208,7 @@ def _persist_move_remote_state(
         enqueue_job(
             session,
             job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+            execution_origin=ExecutionOrigin.BACKGROUND,
             account_id=account_id,
             payload={},
             priority=50,
@@ -309,6 +317,7 @@ def push_remote_operations(
     account_id: uuid.UUID,
     *,
     worker_id: str,
+    execution_origin: ExecutionOrigin | str,
     store: CredentialStore | None = None,
     limit: int = 500,
     lease_ttl: timedelta = timedelta(seconds=120),
@@ -326,6 +335,7 @@ def push_remote_operations(
     """
     from mail_core.providers.base import RemoteOperationItem, RemoteOperationResult
 
+    origin = normalize_execution_origin(execution_origin)
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -379,6 +389,7 @@ def push_remote_operations(
                 enqueue_job(
                     session,
                     job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload={},
                     priority=40,
@@ -467,6 +478,7 @@ def push_remote_operations(
             followup = enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={},
                 priority=40,
@@ -570,6 +582,7 @@ def push_remote_operations(
             followup = enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={},
                 priority=40,
@@ -715,6 +728,7 @@ def push_remote_operations(
             enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={},
                 priority=40,
@@ -731,6 +745,7 @@ def push_remote_operations(
                 enqueue_job(
                     session,
                     job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload={},
                     priority=40,

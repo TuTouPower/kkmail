@@ -85,7 +85,7 @@ def test_memory_provider_sync_folders_and_metadata():
             session.commit()
             account_id = acc.id
 
-        result = sync_account_folders(account_id, worker_id="w-test", store=store)
+        result = sync_account_folders(account_id, worker_id="w-test", store=store, execution_origin="foreground")
         assert result["status"] == "ok"
         assert result["folders"] >= 1
 
@@ -94,7 +94,7 @@ def test_memory_provider_sync_folders_and_metadata():
             assert folder.remote_id.upper() == "INBOX"
             folder_id = folder.id
 
-        meta = sync_folder_metadata(account_id, folder_id, worker_id="w-test", store=store, max_pages=10)
+        meta = sync_folder_metadata(account_id, folder_id, worker_id="w-test", store=store, max_pages=10, execution_origin="foreground")
         assert meta["status"] == "ok"
         assert meta["upserted"] == 4
         assert meta["exhausted"] is True
@@ -135,7 +135,7 @@ def test_live_imap_sync_via_worker_handler(monkeypatch):
             credential_ref=ref,
             config={"imap_host": host, "imap_port": port, "imap_user": user, "use_ssl": False},
         )
-        enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=acc.id)
+        enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=acc.id, execution_origin="foreground")
         session.commit()
         account_id = acc.id
 

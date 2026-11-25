@@ -44,7 +44,7 @@ def test_coerce_retry_after_accepts_finite_non_negative(raw, expected):
 
 
 def test_evaluate_result_capacity_with_garbage_retry_after_reschedules_without_attempt():
-    job = WorkerJob(job_type=JobType.REMOTE_OPERATION_PUSH.value, status="claimed", payload={})
+    job = WorkerJob(job_type=JobType.REMOTE_OPERATION_PUSH.value, status="claimed", payload={}, execution_origin="foreground")
     job.id = uuid.uuid4()
     session = MagicMock()
     with (
@@ -64,7 +64,7 @@ def test_evaluate_result_capacity_with_garbage_retry_after_reschedules_without_a
 
 
 def test_handle_job_capacity_exception_with_garbage_retry_after_reschedules():
-    job = WorkerJob(job_type=JobType.GC_BLOBS.value, status="claimed", payload={})
+    job = WorkerJob(job_type=JobType.GC_BLOBS.value, status="claimed", payload={}, execution_origin="background")
     job.id = uuid.uuid4()
     job.locked_by = "w-a18"
     session = MagicMock()

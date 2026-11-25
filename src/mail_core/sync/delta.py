@@ -11,8 +11,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
-from mail_core.sync.context import classify_failure, sync_context_payload
-from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncStatus
+from mail_core.sync.context import classify_failure, sync_request_payload
+from mail_core.mail.domain.enums import (
+    ExecutionOrigin,
+    JobStatus,
+    JobType,
+    OutboxEventType,
+    SyncPhase,
+    SyncStatus,
+    normalize_execution_origin,
+)
 from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
@@ -306,6 +314,7 @@ def _reschedule_delta_after_fencing_mismatch(
     *,
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
+    execution_origin: ExecutionOrigin | str,
     priority: int = 60,
     request_id: uuid.UUID | None = None,
 ) -> bool:
@@ -318,11 +327,13 @@ def _reschedule_delta_after_fencing_mismatch(
     whether it coalesced into a CLAIMED job. The reschedule keeps the
     original job's ``priority`` (t074).
     """
+    origin = normalize_execution_origin(execution_origin)
     followup = enqueue_job(
         session,
         job_type=JobType.SYNC_FOLDER_DELTA.value,
+        execution_origin=origin,
         account_id=account_id,
-        payload=sync_context_payload(request_id, folder_id=str(folder_id)),
+        payload=sync_request_payload(request_id, folder_id=str(folder_id)),
         priority=priority,
         run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
         dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -335,6 +346,7 @@ def sync_folder_delta(
     folder_id: uuid.UUID,
     *,
     worker_id: str,
+    execution_origin: ExecutionOrigin | str,
     store: CredentialStore | None = None,
     lease_ttl: timedelta = timedelta(seconds=120),
     max_pages: int = 20,
@@ -354,6 +366,7 @@ def sync_folder_delta(
     unexhausted paging) keeps it instead of resetting to the type
     default (t074). Direct callers that omit it keep the historical 60.
     """
+    origin = normalize_execution_origin(execution_origin)
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -383,8 +396,9 @@ def sync_folder_delta(
             followup = enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=origin,
                 account_id=account_id,
-                payload=sync_context_payload(request_id, folder_id=str(folder_id)),
+                payload=sync_request_payload(request_id, folder_id=str(folder_id)),
                 priority=priority,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
                 dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -453,8 +467,9 @@ def sync_folder_delta(
                     followup = enqueue_job(
                         session,
                         job_type=JobType.SYNC_FOLDER_METADATA.value,
+                        execution_origin=origin,
                         account_id=account_id,
-                        payload=sync_context_payload(
+                        payload=sync_request_payload(
                             request_id,
                             folder_id=str(folder_id),
                             reason="cursor_invalid",
@@ -469,7 +484,12 @@ def sync_folder_delta(
                 except FencingMismatch:
                     session.rollback()
                     followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                        session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
+                        session,
+                        account_id=account_id,
+                        folder_id=folder_id,
+                        execution_origin=origin,
+                        priority=priority,
+                        request_id=request_id,
                     )
                     session.commit()
                     return {
@@ -501,8 +521,9 @@ def sync_folder_delta(
                 enqueue_job(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
+                    execution_origin=origin,
                     account_id=account_id,
-                    payload=sync_context_payload(request_id, folder_id=str(folder_id)),
+                    payload=sync_request_payload(request_id, folder_id=str(folder_id)),
                     priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -518,8 +539,9 @@ def sync_folder_delta(
                 followup = enqueue_job(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
+                    execution_origin=origin,
                     account_id=account_id,
-                    payload=sync_context_payload(request_id, folder_id=str(folder_id)),
+                    payload=sync_request_payload(request_id, folder_id=str(folder_id)),
                     priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -565,7 +587,12 @@ def sync_folder_delta(
             except FencingMismatch:
                 session.rollback()
                 followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
+                    session,
+                    account_id=account_id,
+                    folder_id=folder_id,
+                    execution_origin=origin,
+                    priority=priority,
+                    request_id=request_id,
                 )
                 session.commit()
                 return {
@@ -605,7 +632,12 @@ def sync_folder_delta(
             except FencingMismatch:
                 session.rollback()
                 followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
+                    session,
+                    account_id=account_id,
+                    folder_id=folder_id,
+                    execution_origin=origin,
+                    priority=priority,
+                    request_id=request_id,
                 )
                 session.commit()
                 return {
@@ -630,7 +662,12 @@ def sync_folder_delta(
         except FencingMismatch:
             session.rollback()
             followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
+                session,
+                account_id=account_id,
+                folder_id=folder_id,
+                execution_origin=origin,
+                priority=priority,
+                request_id=request_id,
             )
             session.commit()
             return {
@@ -643,6 +680,7 @@ def sync_folder_delta(
             enqueue_job(
                 session,
                 job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                execution_origin=ExecutionOrigin.BACKGROUND,
                 account_id=account_id,
                 priority=60,
                 dedupe_key=f"archive_mime_batch:{account_id}",
@@ -651,8 +689,9 @@ def sync_folder_delta(
             enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=origin,
                 account_id=account_id,
-                payload=sync_context_payload(request_id, folder_id=str(folder_id)),
+                payload=sync_request_payload(request_id, folder_id=str(folder_id)),
                 priority=priority,
                 dedupe_key=f"delta:{account_id}:{folder_id}",
             )

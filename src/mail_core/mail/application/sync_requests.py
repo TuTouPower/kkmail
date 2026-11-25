@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.accounts import enabled_account_ids
-from mail_core.mail.domain.enums import JobType, SyncStatus
+from mail_core.mail.domain.enums import ExecutionOrigin, JobType, SyncStatus
 from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.models import (
     Account,
@@ -25,7 +25,7 @@ from mail_core.mail.storage.models import (
     SyncRequestTarget,
     WorkerJob,
 )
-from mail_core.sync.context import sync_context_payload
+from mail_core.sync.context import sync_request_payload
 from mail_core.sync.execution import bind_target
 from mail_core.sync.jobs import enqueue_job
 
@@ -283,6 +283,74 @@ def resolve_sync_targets(
     return targets
 
 
+def _enqueue_candidate_job(
+    session: Session,
+    *,
+    request_id: uuid.UUID,
+    req_origin: ExecutionOrigin,
+    mode: Literal["delta", "full"],
+    cand: TargetCandidate,
+    target: SyncRequestTarget,
+) -> None:
+    if mode == "delta":
+        if cand.folder_id is not None:
+            job = enqueue_job(
+                session,
+                job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=req_origin,
+                account_id=cand.account_id,
+                payload=sync_request_payload(request_id, folder_id=str(cand.folder_id)),
+                priority=20,
+                dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
+            )
+            phase = "delta"
+        else:
+            job = enqueue_job(
+                session,
+                job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                execution_origin=req_origin,
+                account_id=cand.account_id,
+                payload=sync_request_payload(request_id),
+                priority=20,
+                dedupe_key=f"sync:{cand.account_id}",
+            )
+            phase = "folder_discovery"
+        bind_target(
+            session,
+            target=target,
+            job=job,
+            phase=phase,
+            folder_id=cand.folder_id,
+            status="queued",
+        )
+        return
+
+    # Full scan: reuse the in-flight scan's root generation when one is already running
+    # for this account, so the new request observes the same scan instead of forcing
+    # a second cursor reset (design §5.2/§5.3).
+    root_generation = _inflight_full_root_generation(session, cand.account_id)
+    if root_generation is None:
+        root_generation = uuid.uuid4()
+    job = enqueue_job(
+        session,
+        job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+        execution_origin=req_origin,
+        account_id=cand.account_id,
+        payload=sync_request_payload(request_id, full=True, scan_generation=str(root_generation)),
+        priority=50,
+        dedupe_key=f"sync:{cand.account_id}",
+    )
+    bind_target(
+        session,
+        target=target,
+        job=job,
+        phase="folder_discovery",
+        folder_id=cand.folder_id,
+        status="queued",
+    )
+    target.requested_generation = root_generation
+
+
 def create_sync_request(
     session: Session,
     *,
@@ -331,6 +399,11 @@ def create_sync_request(
         mode=mode,
     )
 
+    req_origin = (
+        ExecutionOrigin.BACKGROUND
+        if bool(canonical_scope.get("background"))
+        else ExecutionOrigin.FOREGROUND
+    )
     request_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     initial_state = "complete" if not candidates else "queued"
@@ -368,62 +441,14 @@ def create_sync_request(
                 # deduplicated job is observed under its own generation; a
                 # CLAIMED job's observer binds the pre-allocated successor
                 # generation, never the running execution.
-                if mode == "delta":
-                    if cand.folder_id is not None:
-                        job = enqueue_job(
-                            session,
-                            job_type=JobType.SYNC_FOLDER_DELTA.value,
-                            account_id=cand.account_id,
-                            payload=sync_context_payload(request_id, folder_id=str(cand.folder_id)),
-                            priority=20,
-                            dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
-                        )
-                        phase = "delta"
-                    else:
-                        job = enqueue_job(
-                            session,
-                            job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
-                            account_id=cand.account_id,
-                            payload=sync_context_payload(request_id),
-                            priority=20,
-                            dedupe_key=f"sync:{cand.account_id}",
-                        )
-                        phase = "folder_discovery"
-                    bind_target(
-                        session,
-                        target=target,
-                        job=job,
-                        phase=phase,
-                        folder_id=cand.folder_id,
-                        status="queued",
-                    )
-                else:
-                    # Full scan: reuse the in-flight scan's root generation
-                    # when one is already running for this account, so the
-                    # new request observes the same scan instead of forcing
-                    # a second cursor reset (design §5.2/§5.3).
-                    root_generation = _inflight_full_root_generation(session, cand.account_id)
-                    if root_generation is None:
-                        root_generation = uuid.uuid4()
-                    job = enqueue_job(
-                        session,
-                        job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
-                        account_id=cand.account_id,
-                        payload=sync_context_payload(
-                            request_id, full=True, scan_generation=str(root_generation)
-                        ),
-                        priority=50,
-                        dedupe_key=f"sync:{cand.account_id}",
-                    )
-                    bind_target(
-                        session,
-                        target=target,
-                        job=job,
-                        phase="folder_discovery",
-                        folder_id=cand.folder_id,
-                        status="queued",
-                    )
-                    target.requested_generation = root_generation
+                _enqueue_candidate_job(
+                    session,
+                    request_id=request_id,
+                    req_origin=req_origin,
+                    mode=mode,
+                    cand=cand,
+                    target=target,
+                )
 
             # A21: Decouple inbox sync from background full sync (folder discovery + sibling folders)
             # When requesting a delta sync on account scope, accounts with an existing inbox have their
@@ -473,8 +498,9 @@ def create_sync_request(
                     bg_job = enqueue_job(
                         session,
                         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                        execution_origin=ExecutionOrigin.BACKGROUND,
                         account_id=aid,
-                        payload=sync_context_payload(bg_request_id),
+                        payload=sync_request_payload(bg_request_id),
                         priority=60,
                         dedupe_key=f"sync:{aid}",
                     )

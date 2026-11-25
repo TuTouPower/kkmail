@@ -93,6 +93,7 @@ def test_concurrent_workers_non_overlapping_claims(managed_subprocesses):
                 account_id=acc.id,
                 payload={"index": i},
                 dedupe_key=f"conc-job-{acc.id}",
+                execution_origin="foreground",
             )
             job_ids.append(job.id)
         session.commit()
@@ -157,6 +158,7 @@ def test_worker_sigkill_and_survivor_reclaim(managed_subprocesses):
             job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
             account_id=acc_id,
             payload={"reclaim_target": True},
+            execution_origin="foreground",
         )
         stuck_job.status = JobStatus.CLAIMED.value
         stuck_job.locked_by = "dead-worker-pid-killed"

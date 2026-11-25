@@ -206,7 +206,7 @@ def schedule_periodic_inbox_sync(
     """
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import select
-    from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+    from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType, SyncStatus
     from mail_core.mail.domain.folder_views import CONTAINER
     from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
     from mail_core.sync.jobs import enqueue_job
@@ -276,8 +276,9 @@ def schedule_periodic_inbox_sync(
         enqueue_job(
             session,
             job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND,
             account_id=account_id,
-            payload={"folder_id": str(folder_id), "background": True},
+            payload={"folder_id": str(folder_id)},
             priority=75,
             run_after=run_after,
             dedupe_key=f"delta:{account_id}:{folder_id}",

@@ -66,7 +66,11 @@ def test_mutating_apps_commit_once_on_success(monkeypatch):
     session2 = _FakeSession()
     _patch_factory(monkeypatch, session2)
     job_id = uuid.uuid4()
-    monkeypatch.setattr(accounts_app, "enqueue_account_sync", lambda s, aid: job_id)
+    monkeypatch.setattr(
+        accounts_app,
+        "enqueue_account_sync",
+        lambda s, aid, *, execution_origin: job_id,
+    )
     result = accounts_app.sync_account_app(uuid.uuid4())
     assert result.job_id == str(job_id)
     assert session2.commits == 1

@@ -1,11 +1,10 @@
-"""Real-chain coverage for background sync lineage (spec §15.2/§15.3).
+"""Real-chain coverage for background sync lineage (spec §15.2/§15.3 & t090).
 
-Background isolation is derived from ``SyncRequest.scope["background"]`` via
-the ``request_id`` carried by every derived/requeued account-sync job, never
-from a payload marker. These tests run the real create/discovery/handler chain
-against the real PostgreSQL schema built by Alembic; the advisory generation
-lock is stubbed so the single-process lineage chain does not depend on
-cross-worker coordination.
+Background isolation is stored on the first-class ``WorkerJob.execution_origin``
+column (never a payload ``background`` marker) and verified alongside
+``SyncRequest.scope["background"]`` across discovery, child delta/metadata
+jobs, and retry handlers. These tests run the real create/discovery/handler
+chain against the real PostgreSQL schema built by Alembic.
 """
 
 from __future__ import annotations
@@ -33,9 +32,9 @@ from mail_core.sync.context import (
     account_failure_kind,
     classify_failure,
     resolve_sync_context,
-    sync_context_payload,
+    sync_request_payload,
 )
-from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import (
     Account,
     Folder,
@@ -180,6 +179,7 @@ def _prepare(monkeypatch, *, baselines=True, manual_background=False):
             job = WorkerJob(
                 job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                 account_id=aid,
+                execution_origin=ExecutionOrigin.BACKGROUND.value,
                 payload={"request_id": str(bg_id)},
                 priority=60,
                 status=JobStatus.PENDING.value,
@@ -216,6 +216,7 @@ def _seed_foreground_request(Session, aid, folder_id, job_type):
         job = WorkerJob(
             job_type=job_type,
             account_id=aid,
+            execution_origin=ExecutionOrigin.FOREGROUND.value,
             payload={"folder_id": str(folder_id), "request_id": str(rid)},
             priority=60,
             status=JobStatus.CLAIMED.value,
@@ -243,7 +244,8 @@ class _RateLimitedMetadataProvider:
         raise RateLimitedError("slow down", retry_after_seconds=30)
 
 
-def test_resolve_sync_context_uses_scope_and_fails_closed(monkeypatch):
+def test_resolve_sync_context_uses_origin_and_scope_consistently(monkeypatch):
+    """t090: lineage comes from WorkerJob.execution_origin + SyncRequest.scope fail-closed."""
     Session = _make_session(monkeypatch)
     fg_id, bg_id, unknown = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     with Session() as session:
@@ -270,32 +272,42 @@ def test_resolve_sync_context_uses_scope_and_fails_closed(monkeypatch):
             )
         )
         session.commit()
-        assert resolve_sync_context(session, SimpleNamespace(payload={"request_id": str(bg_id)})) == (
-            True,
-            bg_id,
-        )
-        assert resolve_sync_context(session, SimpleNamespace(payload={"request_id": str(fg_id)})) == (
-            False,
-            fg_id,
-        )
-        assert resolve_sync_context(session, SimpleNamespace(payload={"request_id": str(unknown)})) == (
-            False,
-            unknown,
-        )
-        assert resolve_sync_context(session, SimpleNamespace(payload={"parent_request_id": str(bg_id)})) == (
-            True,
-            bg_id,
-        )
-        assert resolve_sync_context(session, SimpleNamespace(payload={})) == (False, None)
-        assert resolve_sync_context(session, SimpleNamespace(payload=None)) == (False, None)
+        assert resolve_sync_context(
+            session,
+            SimpleNamespace(execution_origin="background", payload={"request_id": str(bg_id)}),
+        ) == (True, bg_id)
+        assert resolve_sync_context(
+            session,
+            SimpleNamespace(execution_origin="foreground", payload={"request_id": str(fg_id)}),
+        ) == (False, fg_id)
+        assert resolve_sync_context(
+            session,
+            SimpleNamespace(execution_origin="foreground", payload={"request_id": str(unknown)}),
+        ) == (False, unknown)
+        assert resolve_sync_context(
+            session,
+            SimpleNamespace(execution_origin="background", payload={"request_id": str(unknown)}),
+        ) == (True, unknown)
+        assert resolve_sync_context(
+            session,
+            SimpleNamespace(execution_origin="foreground", payload={"parent_request_id": str(bg_id)}),
+        ) == (True, bg_id)
+        assert resolve_sync_context(
+            session, SimpleNamespace(execution_origin="foreground", payload={})
+        ) == (False, None)
+        assert resolve_sync_context(
+            session, SimpleNamespace(execution_origin="background", payload=None)
+        ) == (True, None)
+        with pytest.raises(ValueError, match="execution_origin"):
+            resolve_sync_context(session, SimpleNamespace(payload={}))
 
 
-def test_sync_context_payload_carries_lineage_without_marker():
+def test_sync_request_payload_carries_correlation_without_marker():
     rid = uuid.uuid4()
-    payload = sync_context_payload(rid, folder_id="f", full=True, scan_generation=None)
+    payload = sync_request_payload(rid, folder_id="f", full=True, scan_generation=None)
     assert payload == {"folder_id": "f", "full": True, "request_id": str(rid)}
     assert "background" not in payload
-    assert sync_context_payload(None, folder_id="f") == {"folder_id": "f"}
+    assert sync_request_payload(None, folder_id="f") == {"folder_id": "f"}
 
 
 def test_failure_status_classification_is_centralized():
@@ -342,6 +354,7 @@ def test_background_discovery_delta_children_carry_lineage(monkeypatch):
             )
         )
         assert discovery is not None
+        assert discovery.execution_origin == ExecutionOrigin.BACKGROUND.value
         assert discovery.payload == {"request_id": str(bg_id)}
         assert "background" not in discovery.payload
         deltas = list(
@@ -354,6 +367,7 @@ def test_background_discovery_delta_children_carry_lineage(monkeypatch):
         )
         children = [j for j in deltas if j.payload.get("request_id") == str(bg_id)]
         assert len(children) == 2
+        assert all(j.execution_origin == ExecutionOrigin.BACKGROUND.value for j in children)
         assert all("background" not in j.payload for j in children)
         child_folders = {uuid.UUID(str(j.payload["folder_id"])) for j in children}
         assert folders["inbox"] not in child_folders
@@ -374,6 +388,7 @@ def test_background_discovery_metadata_children_carry_lineage(monkeypatch):
         )
         children = [j for j in metas if j.payload.get("request_id") == str(bg_id)]
         assert len(children) == 2
+        assert all(j.execution_origin == ExecutionOrigin.BACKGROUND.value for j in children)
         assert all("background" not in j.payload for j in children)
         assert session.get(Account, aid).credential_state == "valid" and session.get(Account, aid).connectivity_state == "connected"
 
@@ -521,6 +536,7 @@ def test_foreground_success_recovers_failed_account(monkeypatch):
         job = WorkerJob(
             job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
             account_id=aid,
+            execution_origin=ExecutionOrigin.FOREGROUND.value,
             payload={"request_id": str(fg_id)},
             priority=60,
             status=JobStatus.CLAIMED.value,

@@ -74,6 +74,7 @@ def test_delta_cursor_invalid_keeps_request_open_until_rebuild_settles(monkeypat
             status=JobStatus.CLAIMED.value,
             locked_by="delta-worker",
             dedupe_key=f"delta:{account.id}:{folder.id}",
+            execution_origin="foreground",
         )
         session.add(delta_job)
         session.flush()
@@ -116,7 +117,7 @@ def test_delta_cursor_invalid_keeps_request_open_until_rebuild_settles(monkeypat
         "build_provider",
         lambda _account, _store=None, **_kwargs: _InvalidCursorProvider(),
     )
-    result = sync_folder_delta(account_id, folder_id, worker_id="delta-worker", store=object())
+    result = sync_folder_delta(account_id, folder_id, worker_id="delta-worker", store=object(), execution_origin="foreground")
 
     assert result["status"] == "cursor_invalid"
     assert result["followup_scheduled"] is True

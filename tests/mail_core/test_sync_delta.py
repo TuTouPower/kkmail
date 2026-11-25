@@ -49,10 +49,10 @@ def test_memory_incremental_delta_upsert_flag_delete():
             )
             session.commit()
             account_id = acc.id
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"]
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"]
 
         # Incremental changes after baseline
         provider.append_message(
@@ -62,7 +62,7 @@ def test_memory_incremental_delta_upsert_flag_delete():
         provider.flag_message("INBOX", "1", is_read=True)
         provider.remove_message("INBOX", "1")
 
-        result = sync_folder_delta(account_id, folder_id, worker_id="w", store=store, max_pages=5)
+        result = sync_folder_delta(account_id, folder_id, worker_id="w", store=store, max_pages=5, execution_origin="foreground")
         assert result["status"] == "ok"
         assert result["upserted"] + result["flagged"] >= 1
         assert result["deleted"] >= 1

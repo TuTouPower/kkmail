@@ -1,7 +1,7 @@
 ---
 slug: mail_sync_and_storage
 status: active
-tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089]
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090]
 ---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
@@ -24,6 +24,7 @@ ______________________________________________________________________
     - 单次元数据同步任务最大拉取批次限制为 10 页（约 500 封），避免长时间霸占 Worker 队列；
     - 遇到 `TimeoutError`、`SSLEOFError` 等网络瞬态故障时采用指数退避重试，未达重试上限不污染账号为 `failed` 状态。
 - **连接健康状态机与结构化故障分类**（t087）：`connectivity_state` 的 `unreachable` 仅在 5 分钟滑动窗口内累计 5 次传输失败且跨度达到 5 分钟时可达，窗口外失败开启新 streak，跨天累计不再升级；15 分钟无新失败的 `unreachable` 由 Worker 复核降级为 `degraded`，任何传输成功（含 IDLE 建连成功）复位 `connected`，状态迁移通过 `account.updated` 广播；故障分类使用异常类型、HTTP status、errno 与生产者附加的 `failure_code`，禁止自由文本 marker 匹配，磁盘满/句柄耗尽/配置错误不得计入连接健康。
+- **Worker 任务强类型执行血缘与后台健康隔离**（t090）：`worker_jobs.execution_origin`（`foreground` / `background`，`NOT NULL` + DB `CHECK` 约束，迁移 `20261125_0006`）作为一等公民持久化执行来源；`enqueue_job` 强制显式传入 `execution_origin`（缺失/非法值立即拒绝，无默认回落前台）；定期收件箱轮询、全夹巡检（`patrol.py`）、IDLE 建连补偿与唤醒（`idle_watcher.py`）、常规批量归档、`remote_push` 目录发现兜底及后台 `SyncRequest` 显式写入 `background`，并在 `complete_job` 后继派生、`reschedule_job` 重排及 `delta`/`engine`/`remote_push` 全部延续与重建分支自动继承（去重合并时前台优先且不篡改已认领的在途后台任务）；`resolve_sync_context` 直接基于 `WorkerJob.execution_origin` 结合 `SyncRequest.scope` fail-closed 裁决隔离，停止从自由 JSON `payload["background"]` 猜测，确保后台传输故障绝不污染账号 `connectivity_state`，同时任何域下的永久认证失败（`AUTH`）均使凭据失效。
 
 ### 2. Microsoft Graph 同步
 

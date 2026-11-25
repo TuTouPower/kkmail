@@ -107,6 +107,22 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ExecutionOrigin(StrEnum):
+    """First-class execution lineage of a worker job."""
+
+    FOREGROUND = "foreground"
+    BACKGROUND = "background"
+
+
+def normalize_execution_origin(value: ExecutionOrigin | str) -> ExecutionOrigin:
+    """Validate and normalize a worker job execution origin."""
+    if isinstance(value, ExecutionOrigin):
+        return value
+    if isinstance(value, str):
+        return ExecutionOrigin(value.strip().lower())
+    raise ValueError(f"invalid execution_origin: {value!r}")
+
+
 class OutboxEventType(StrEnum):
     ACCOUNT_UPDATED = "account.updated"
     MESSAGE_UPSERTED = "message.upserted"

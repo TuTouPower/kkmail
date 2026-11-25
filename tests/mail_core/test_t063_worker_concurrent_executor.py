@@ -54,6 +54,7 @@ def test_ac001_concurrent_capacity_reaches_and_caps_at_total_slots():
                 job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                 account_id=aid,
                 priority=20,
+                execution_origin="foreground",
             )
         session.commit()
 
@@ -121,6 +122,7 @@ def test_ac002_ac003_background_admission_and_foreground_starvation_prevention()
                 account_id=aid,
                 payload={"batch_index": i},  # no message_id -> BACKGROUND
                 priority=60,
+                execution_origin="background",
             )
         session.commit()
 
@@ -174,6 +176,7 @@ def test_ac002_ac003_background_admission_and_foreground_starvation_prevention()
                     account_id=aid,
                     payload={"message_id": str(uuid.uuid4())},  # has message_id -> FOREGROUND
                     priority=10,
+                    execution_origin="foreground",
                 )
                 session.commit()
                 fg_job_id = fg_job.id
@@ -198,11 +201,11 @@ def test_ac004_priority_and_fifo_claim_order():
         aid3 = _seed_account(session)
 
         # Enqueue: priority 50, priority 10, priority 50 (earlier vs later)
-        j1 = enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=aid1, priority=50)
+        j1 = enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=aid1, priority=50, execution_origin="foreground")
         time.sleep(0.01)
-        j2 = enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=aid2, priority=10)
+        j2 = enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=aid2, priority=10, execution_origin="foreground")
         time.sleep(0.01)
-        j3 = enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=aid3, priority=50)
+        j3 = enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=aid3, priority=50, execution_origin="foreground")
         session.commit()
         id1, id2, id3 = j1.id, j2.id, j3.id
 
@@ -225,13 +228,13 @@ def test_ac005_per_account_lease_mutual_exclusion():
         aid_b = _seed_account(session)
 
         # Acc A has two lease jobs: delta and metadata
-        j_a1 = enqueue_job(session, job_type=JobType.SYNC_FOLDER_DELTA.value, account_id=aid_a, priority=20)
-        j_a2 = enqueue_job(session, job_type=JobType.SYNC_FOLDER_METADATA.value, account_id=aid_a, priority=25)
+        j_a1 = enqueue_job(session, job_type=JobType.SYNC_FOLDER_DELTA.value, account_id=aid_a, priority=20, execution_origin="foreground")
+        j_a2 = enqueue_job(session, job_type=JobType.SYNC_FOLDER_METADATA.value, account_id=aid_a, priority=25, execution_origin="foreground")
         # Acc A also has an archive job (non-lease)
-        j_a_arch = enqueue_job(session, job_type=JobType.ARCHIVE_MIME_BATCH.value, account_id=aid_a, priority=30)
+        j_a_arch = enqueue_job(session, job_type=JobType.ARCHIVE_MIME_BATCH.value, account_id=aid_a, priority=30, execution_origin="background")
 
         # Acc B has one lease job
-        j_b1 = enqueue_job(session, job_type=JobType.SYNC_FOLDER_DELTA.value, account_id=aid_b, priority=20)
+        j_b1 = enqueue_job(session, job_type=JobType.SYNC_FOLDER_DELTA.value, account_id=aid_b, priority=20, execution_origin="foreground")
         session.commit()
         id_a1, id_a2, id_a_arch, id_b1 = j_a1.id, j_a2.id, j_a_arch.id, j_b1.id
 
@@ -311,7 +314,7 @@ def test_ac007_unified_heartbeat_keeps_in_flight_claims_alive():
 
     with Session() as session:
         aid = _seed_account(session)
-        job = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid)
+        job = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid, execution_origin="background")
         session.commit()
         jid = job.id
 
@@ -351,8 +354,8 @@ def test_ac008_exception_isolation_among_concurrent_tasks():
     with Session() as session:
         aid1 = _seed_account(session)
         aid2 = _seed_account(session)
-        j_bad = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid1, payload={"fail": True})
-        j_good = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid2, payload={"fail": False})
+        j_bad = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid1, payload={"fail": True}, execution_origin="background")
+        j_good = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid2, payload={"fail": False}, execution_origin="background")
         session.commit()
         bad_id, good_id = j_bad.id, j_good.id
 
@@ -386,7 +389,7 @@ def test_ac010_graceful_shutdown_waits_for_in_flight():
     Session = get_session_factory()
     with Session() as session:
         aid = _seed_account(session)
-        job = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid)
+        job = enqueue_job(session, job_type=JobType.GC_BLOBS.value, account_id=aid, execution_origin="background")
         session.commit()
         jid = job.id
 

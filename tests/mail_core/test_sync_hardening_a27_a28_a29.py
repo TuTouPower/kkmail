@@ -109,17 +109,17 @@ def test_a27_sync_folder_delta_sanitizes_errors(monkeypatch):
         monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
         monkeypatch.setattr(delta_mod, "build_provider", lambda a, s=None, **kwargs: provider)
 
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"]
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"]
 
         # Simulate provider raising ProviderHttpError with sensitive body
         def boom(folder_remote_id, cursor):
             raise ProviderHttpError("Sensitive server crash: token=LEAKED_SECRET", status=500, body={"leak": "LEAKED_BODY"})
 
         provider.delta_changes = boom  # type: ignore[method-assign]
-        res = sync_folder_delta(account_id, folder_id, worker_id="w", store=store)
+        res = sync_folder_delta(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
         assert res["status"] == "provider_error"
         assert res["error"] == "ProviderHttpError status=500"
         assert "LEAKED" not in res["error"]
@@ -166,7 +166,7 @@ def test_a27_sync_account_folders_leaves_account_health_untouched(monkeypatch):
         monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: FlakyFolders())
 
         with pytest.raises(ProviderHttpError):
-            sync_account_folders(account_id, worker_id="w", store=store)
+            sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")
 
         with Session() as session:
             acc = session.get(Account, account_id)
@@ -206,7 +206,7 @@ def test_a27_remote_push_sanitizes_errors(monkeypatch):
             )
             session.commit()
 
-        push_remote_operations(account_id, worker_id="w", store=store)
+        push_remote_operations(account_id, worker_id="w", store=store, execution_origin="foreground")
 
         with Session() as session:
             op = session.scalar(select(RemoteOperation).where(RemoteOperation.account_id == account_id).limit(1))
@@ -242,10 +242,10 @@ def test_a28_worker_handler_rate_limited_single_job(monkeypatch):
         monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
         monkeypatch.setattr(delta_mod, "build_provider", lambda a, s=None, **kwargs: provider)
 
-        sync_account_folders(account_id, worker_id="w", store=store)
+        sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
+        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
 
         # Clear any prior background jobs from metadata sync
         with Session() as session:
@@ -261,6 +261,7 @@ def test_a28_worker_handler_rate_limited_single_job(monkeypatch):
                 account_id=account_id,
                 payload={"folder_id": str(folder_id)},
                 priority=60,
+                execution_origin="foreground",
             )
             initial_job.status = JobStatus.CLAIMED.value
             initial_job.locked_by = "test-worker"
@@ -342,7 +343,7 @@ def test_a28_remote_push_rate_limit_respects_retry_after_and_attempt_cap(
             session.commit()
             op_id = op.id
 
-        result = push_remote_operations(account_id, worker_id="w", store=store)
+        result = push_remote_operations(account_id, worker_id="w", store=store, execution_origin="foreground")
 
         with Session() as session:
             op = session.get(RemoteOperation, op_id)
@@ -394,7 +395,7 @@ def test_a29_sync_account_folders_releases_lease_on_build_provider_failure(monke
         monkeypatch.setattr(engine_mod, "build_provider", fail_build)
 
         with pytest.raises(ValueError, match="corrupted credentials"):
-            sync_account_folders(account_id, worker_id="worker-a29", store=store)
+            sync_account_folders(account_id, worker_id="worker-a29", store=store, execution_origin="foreground")
 
         with Session() as session:
             lease = session.get(AccountSyncLease, account_id)
@@ -424,7 +425,7 @@ def test_a29_sync_folder_metadata_releases_lease_on_build_provider_failure(monke
         monkeypatch.setattr(engine_mod, "build_provider", fail_build)
 
         with pytest.raises(RuntimeError, match="provider init failed"):
-            sync_folder_metadata(account_id, folder_id, worker_id="worker-a29", store=store)
+            sync_folder_metadata(account_id, folder_id, worker_id="worker-a29", store=store, execution_origin="foreground")
 
         with Session() as session:
             lease = session.get(AccountSyncLease, account_id)
@@ -450,10 +451,10 @@ def test_a29_sync_folder_delta_releases_lease_on_build_provider_failure(monkeypa
             account_id = acc.id
 
         monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
-        sync_account_folders(account_id, worker_id="w", store=store)
+        sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
+        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
 
         def fail_build(account, store=None, **kwargs):
             raise RuntimeError("delta build failure")
@@ -461,7 +462,7 @@ def test_a29_sync_folder_delta_releases_lease_on_build_provider_failure(monkeypa
         monkeypatch.setattr(delta_mod, "build_provider", fail_build)
 
         with pytest.raises(RuntimeError, match="delta build failure"):
-            sync_folder_delta(account_id, folder_id, worker_id="worker-a29", store=store)
+            sync_folder_delta(account_id, folder_id, worker_id="worker-a29", store=store, execution_origin="foreground")
 
         with Session() as session:
             lease = session.get(AccountSyncLease, account_id)
@@ -496,7 +497,7 @@ def test_a29_remote_push_releases_lease_on_build_provider_failure(monkeypatch):
         monkeypatch.setattr(push_mod, "build_provider", fail_build)
 
         with pytest.raises(RuntimeError, match="push build failure"):
-            push_remote_operations(account_id, worker_id="worker-a29", store=store)
+            push_remote_operations(account_id, worker_id="worker-a29", store=store, execution_origin="foreground")
 
         with Session() as session:
             lease = session.get(AccountSyncLease, account_id)
