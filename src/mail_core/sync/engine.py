@@ -17,15 +17,24 @@ from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.sync.context import sync_request_payload
 from mail_core.mail.domain.enums import (
     ExecutionOrigin,
+    FolderRemoteState,
     JobStatus,
     JobType,
     OutboxEventType,
     SyncPhase,
     SyncRunStatus,
-    SyncStatus,
     normalize_execution_origin,
 )
-from mail_core.mail.domain.folder_views import CONTAINER, VIEW, is_gmail_account, is_gmail_view, is_view_folder
+from mail_core.mail.domain.folder_views import (
+    CONTAINER,
+    folder_sync_skip_reason,
+    is_gmail_account,
+    is_syncable_folder,
+)
+from mail_core.sync.folder_rebind import (
+    expected_folder_kind,
+    rebind_system_folders,
+)
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
@@ -173,6 +182,21 @@ def _bind_phase_jobs(
         )
 
 
+def _apply_folder_attributes(
+    folder: Folder,
+    rf,
+    *,
+    expected_kind: str,
+) -> None:
+    folder.remote_id = rf.remote_id
+    folder.name = rf.name
+    folder.role = rf.role
+    folder.parent_remote_id = rf.parent_remote_id
+    folder.kind = expected_kind
+    folder.selectable = bool(rf.selectable)
+    folder.remote_state = FolderRemoteState.ACTIVE.value
+
+
 def sync_account_folders(
     account_id: uuid.UUID,
     *,
@@ -291,43 +315,32 @@ def sync_account_folders(
             for f in session.scalars(select(Folder).where(Folder.account_id == account_id)).all()
         }
         remote_ids = {rf.remote_id for rf in remote_folders}
-        for existing in by_remote.values():
-            if (
-                existing.kind == CONTAINER
-                and existing.remote_id not in remote_ids
-                and existing.sync_status != SyncStatus.PAUSED.value
-            ):
-                existing.sync_status = SyncStatus.PAUSED.value
-                # The folder is gone remotely: converge its open sync-request
-                # targets to an explicit failure before it becomes
-                # unreachable (design §5.2).
-                fail_open_targets(
-                    session,
-                    folder_id=existing.id,
-                    error_code="folder_deleted",
-                    safe_error="Folder no longer exists on the server",
-                )
-                session.add(
-                    OutboxEvent(
-                        event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
-                        account_id=account_id,
-                        payload={"folder_id": str(existing.id)},
-                    )
-                )
         is_gmail = is_gmail_account(account)
+
         # A21: Sort folders so inbox is processed and enqueued first
         sorted_remote_folders = sorted(
             remote_folders,
             key=lambda rf: 0 if (getattr(rf, "role", None) == "inbox" or getattr(rf, "name", "").upper() == "INBOX") else 1,
         )
+
+        # Match vanished system folders 1-to-1 to localized replacements before creating new rows.
+        rebind_by_remote_id = rebind_system_folders(
+            session,
+            account_id=account_id,
+            sorted_remote_folders=sorted_remote_folders,
+            by_remote=by_remote,
+            remote_ids=remote_ids,
+            is_gmail=is_gmail,
+            apply_folder_attributes=_apply_folder_attributes,
+        )
+        upserted += len(rebind_by_remote_id)
+
+        matched_ids: set[uuid.UUID] = set()
         for rf in sorted_remote_folders:
             # A321: virtual folders are identified ONLY by role or the
             # exact remote_id set. A name-substring heuristic would pause
             # user labels such as "[Gmail]/重要客户" forever.
-            is_view = is_gmail and is_gmail_view(rf.role, rf.remote_id)
-            default_sync_status = (
-                SyncStatus.PAUSED.value if not rf.selectable else SyncStatus.IDLE.value
-            )
+            expected_kind = expected_folder_kind(rf, is_gmail=is_gmail)
             existing = by_remote.get(rf.remote_id)
             if existing is None:
                 existing = Folder(
@@ -335,21 +348,20 @@ def sync_account_folders(
                     remote_id=rf.remote_id,
                     name=rf.name,
                     role=rf.role,
-                    kind=VIEW if is_view else CONTAINER,
+                    kind=expected_kind,
                     parent_remote_id=rf.parent_remote_id,
-                    sync_status=default_sync_status,
+                    selectable=bool(rf.selectable),
+                    remote_state=FolderRemoteState.ACTIVE.value,
                 )
                 session.add(existing)
                 session.flush()
+                by_remote[rf.remote_id] = existing
                 upserted += 1
-            else:
-                existing.name = rf.name
-                existing.role = rf.role
-                existing.parent_remote_id = rf.parent_remote_id
-                existing.kind = VIEW if is_view else CONTAINER
-                existing.sync_status = SyncStatus.PAUSED.value if not rf.selectable else SyncStatus.IDLE.value
+            elif rf.remote_id not in rebind_by_remote_id:
+                _apply_folder_attributes(existing, rf, expected_kind=expected_kind)
+            matched_ids.add(existing.id)
             folder_ids.append(existing.id)
-            if rf.selectable and existing.kind == CONTAINER and existing.sync_status != SyncStatus.PAUSED.value:
+            if is_syncable_folder(existing):
                 if not _should_enqueue_discovered_folder(existing.role, background=background):
                     continue
                 cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": existing.id})
@@ -403,6 +415,27 @@ def sync_account_folders(
                             job=metadata_job,
                             source_dedupe_key=f"sync:{account_id}",
                         )
+
+        # Converge all vanished folders (both container and view) uniformly.
+        for existing in by_remote.values():
+            if (
+                existing.id not in matched_ids
+                and existing.remote_state != FolderRemoteState.MISSING.value
+            ):
+                existing.remote_state = FolderRemoteState.MISSING.value
+                fail_open_targets(
+                    session,
+                    folder_id=existing.id,
+                    error_code="folder_deleted",
+                    safe_error="Folder no longer exists on the server",
+                )
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                        account_id=account_id,
+                        payload={"folder_id": str(existing.id)},
+                    )
+                )
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.SYNC_PROGRESS.value,
@@ -467,10 +500,9 @@ def sync_folder_metadata(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
-        if is_view_folder(folder):
-            return {"status": "skipped", "reason": "derived_view"}
-        if folder.sync_status == SyncStatus.PAUSED.value:
-            return {"status": "skipped", "reason": "folder_not_selectable"}
+        skip_reason = folder_sync_skip_reason(folder)
+        if skip_reason is not None:
+            return {"status": "skipped", "reason": skip_reason}
         try:
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:

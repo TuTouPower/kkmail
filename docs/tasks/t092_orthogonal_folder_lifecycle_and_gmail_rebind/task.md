@@ -41,12 +41,12 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：数据库 `Folder` 模型及新增可逆 Alembic 迁移移除 `sync_status`，建立正交的 `kind`（`container` / `view`）、`selectable`（布尔）与 `remote_state`（`active` / `missing`），保持数据库 Schema 校验零漂移；迁移幂等将全库历史 Gmail Important 视图误存的 `role='other'` 修正为 `'important'`，并将同账号因换名并存的多语种系统目录（覆盖历史视图与物理容器）原子合并去重为单行活跃记录且完整保留既有消息位置归属与未失效增量检查点。
-- [ ] AC-002：目录角色域枚举包含 `flagged` 与 `important`；IMAP 目录发现优先识别 RFC 6154 `\Important` 等 SPECIAL-USE 属性，名称回退匹配在剥离厂商命名空间前缀后统一映射标准角色，确保中英文 Gmail 的重要邮件目录与全部系统角色在入库阶段即携带准确 `role`。
-- [ ] AC-003：目录发现阶段遇到同一账号下系统目录在服务端更换显示语言或路径（`remote_id` 变更，且对应物理容器未更改 `UIDVALIDITY` 或属同一系统视图角色）时，原地重绑定并原子合并既有消息位置、检查点与巡检基线，不产生双份重复系统目录也不触发全量重扫；对确认不再存在于服务端的目录统一覆盖 `container` 与 `view` 将其收敛为 `remote_state='missing'` 并失败收敛开放同步目标（`folder_deleted`），后续服务端重新出现时恢复为 `active` 并按需恢复调度。
-- [ ] AC-004：Gmail `\Important` 派生视图的统计计数、邮件列表投影、日常标签写入与历史标签回填严格限定仅作用域指向自身 `Important` 视图行，绝不退化回落为 `All Mail` 全量容器；`folder-stats`、全局与分组聚合未读统计、按角色收件箱查询及出站写回主位置解析严格仅纳入 `remote_state='active'`（写回/同步且要求 `kind='container'` 与 `selectable=true`），不因失效历史目录存在而暴露重名条目、毒化聚合计数或向已消失远端目录发起写回。
-- [ ] AC-005：目录统计接口契约与 OpenAPI / 前端生成类型移除旧 `sync_status`，准确输出目录 `kind` 与 `selectable` 语义并通过前后端契约一致校验；前端侧栏移除依赖目录名关键词猜角色与猜暂停状态的兜底分支，准确对 `selectable=false` 结构节点禁点且不显示未知 `-`，对活跃 Gmail `[Gmail]` 包装节点按规范扁平化呈现唯一清晰的标准化目录树。
-- [ ] AC-006：更新 `docs/specs/mail_sync_and_storage.md` 与对应 `docs/blueprint/` 及决策记录；项目完整后端 PostgreSQL 测试套件、前端构建与单测、桌面端测试、E2E 冒烟及模板门禁全部通过。
+- [x] AC-001：数据库 `Folder` 模型及新增可逆 Alembic 迁移移除 `sync_status`，建立正交的 `kind`（`container` / `view`）、`selectable`（布尔）与 `remote_state`（`active` / `missing`），保持数据库 Schema 校验零漂移；迁移幂等将全库历史 Gmail Important 视图误存的 `role='other'` 修正为 `'important'`，并将同账号因换名并存的多语种系统目录（覆盖历史视图与物理容器）原子合并去重为单行活跃记录且完整保留既有消息位置归属与未失效增量检查点。
+- [x] AC-002：目录角色域枚举包含 `flagged` 与 `important`；IMAP 目录发现优先识别 RFC 6154 `\Important` 等 SPECIAL-USE 属性，名称回退匹配在剥离厂商命名空间前缀后统一映射标准角色，确保中英文 Gmail 的重要邮件目录与全部系统角色在入库阶段即携带准确 `role`。
+- [x] AC-003：目录发现阶段遇到同一账号下系统目录在服务端更换显示语言或路径（`remote_id` 变更，且对应物理容器未更改 `UIDVALIDITY` 或属同一系统视图角色）时，原地重绑定并原子合并既有消息位置、检查点与巡检基线，不产生双份重复系统目录也不触发全量重扫；对确认不再存在于服务端的目录统一覆盖 `container` 与 `view` 将其收敛为 `remote_state='missing'` 并失败收敛开放同步目标（`folder_deleted`），后续服务端重新出现时恢复为 `active` 并按需恢复调度。
+- [x] AC-004：Gmail `\Important` 派生视图的统计计数、邮件列表投影、日常标签写入与历史标签回填严格限定仅作用域指向自身 `Important` 视图行，绝不退化回落为 `All Mail` 全量容器；`folder-stats`、全局与分组聚合未读统计、按角色收件箱查询及出站写回主位置解析严格仅纳入 `remote_state='active'`（写回/同步且要求 `kind='container'` 与 `selectable=true`），不因失效历史目录存在而暴露重名条目、毒化聚合计数或向已消失远端目录发起写回。
+- [x] AC-005：目录统计接口契约与 OpenAPI / 前端生成类型移除旧 `sync_status`，准确输出目录 `kind` 与 `selectable` 语义并通过前后端契约一致校验；前端侧栏移除依赖目录名关键词猜角色与猜暂停状态的兜底分支，准确对 `selectable=false` 结构节点禁点且不显示未知 `-`，对活跃 Gmail `[Gmail]` 包装节点按规范扁平化呈现唯一清晰的标准化目录树。
+- [x] AC-006：更新 `docs/specs/mail_sync_and_storage.md` 与对应 `docs/blueprint/` 及决策记录；项目完整后端 PostgreSQL 测试套件、前端构建与单测、桌面端测试、E2E 冒烟及模板门禁全部通过。
 
 ### 可测试性声明
 

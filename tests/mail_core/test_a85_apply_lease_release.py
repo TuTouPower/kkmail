@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState
 from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint
 from mail_core.sync import delta as delta_mod
 from mail_core.sync import engine
@@ -66,7 +66,8 @@ class _Harness:
         self.folder = SimpleNamespace(
             id=self.folder_id,
             remote_id="INBOX",
-            sync_status=SyncStatus.IDLE.value,
+            selectable=True,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         self.checkpoint = checkpoint
         self.released = 0

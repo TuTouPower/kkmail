@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState, JobStatus, JobType
 from mail_core.mail.storage.models import (
     Account,
     Folder,
@@ -69,7 +69,7 @@ def _seed_folder(
     session,
     *,
     role: str = "sent",
-    sync_status: str = SyncStatus.IDLE.value,
+    remote_state: str = FolderRemoteState.ACTIVE.value,
     sync_enabled: bool = True,
     provider: str = "stub",
     baseline: bool = True,
@@ -92,7 +92,7 @@ def _seed_folder(
         remote_id=f"remote-{uuid.uuid4().hex[:6]}",
         name=role.title(),
         role=role,
-        sync_status=sync_status,
+        remote_state=remote_state,
     )
     session.add(folder)
     session.flush()
@@ -289,7 +289,8 @@ def test_ac011_ac012_skips_paused_disabled_and_records_no_baseline():
     now = datetime.now(timezone.utc)
     old = (now - timedelta(seconds=1300)).timestamp()
     with Session() as session:
-        acc_paused, f_paused = _seed_folder(session, sync_status=SyncStatus.PAUSED.value, last_probe_epoch=old)
+        # t092: missing 远端目录与禁用账号同等跳过巡检（替代旧 paused sync_status）
+        acc_paused, f_paused = _seed_folder(session, remote_state=FolderRemoteState.MISSING.value, last_probe_epoch=old)
         acc_disabled, f_disabled = _seed_folder(session, sync_enabled=False, last_probe_epoch=old)
         acc_nobase, f_nobase = _seed_folder(session, baseline=False, last_probe_epoch=old)
         session.commit()

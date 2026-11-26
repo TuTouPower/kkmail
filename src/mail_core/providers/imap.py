@@ -240,8 +240,11 @@ _FOLDER_ROLE = {
     "Sent": "sent",
     "Sent Items": "sent",
     "Sent Messages": "sent",
+    "Sent Mail": "sent",
     "已发送": "sent",
     "已发送邮件": "sent",
+    "已发邮件": "sent",
+    "Bin": "trash",
     "Drafts": "drafts",
     "草稿": "drafts",
     "草稿箱": "drafts",
@@ -255,6 +258,7 @@ _FOLDER_ROLE = {
     "Important": "important",
     "重要": "important",
 }
+_FOLDER_ROLE_LOWER = {key.lower(): mapped for key, mapped in _FOLDER_ROLE.items()}
 
 
 def decode_mutf7(s: str) -> str:
@@ -774,6 +778,44 @@ class _ImapFlagFetchError(RuntimeError):
 _BULKHEAD_UNSET: Any = object()
 
 
+def _strip_gmail_prefix(value: str, *, delim: str | None) -> str | None:
+    lower = value.lower()
+    if lower.startswith("[gmail]/"):
+        return value[len("[gmail]/") :]
+    if delim:
+        prefix = f"[Gmail]{delim}"
+        if lower.startswith(prefix.lower()):
+            return value[len(prefix) :]
+    return None
+
+
+def _match_known_folder_role(
+    name: str,
+    remote_id: str,
+    *,
+    delim: str | None,
+    parent_remote_id: str | None,
+) -> str:
+    """Resolve known IMAP folder role from decoded name/remote_id or Gmail namespace."""
+    candidates: list[str] = [name, remote_id]
+    in_gmail_ns = (
+        (parent_remote_id or "").lower() == "[gmail]"
+        or name.lower().startswith("[gmail]/")
+        or remote_id.lower().startswith("[gmail]/")
+    )
+    if in_gmail_ns:
+        for val in (name, remote_id):
+            stripped = _strip_gmail_prefix(val, delim=delim)
+            if stripped:
+                candidates.append(stripped)
+
+    for candidate in candidates:
+        mapped = _FOLDER_ROLE.get(candidate) or _FOLDER_ROLE_LOWER.get(candidate.lower())
+        if mapped is not None:
+            return mapped
+    return "other"
+
+
 @dataclass
 class ImapProvider:
     host: str
@@ -1055,23 +1097,18 @@ class ImapProvider:
                         role = "archive"
                     elif "\\all" in flag_lower:
                         role = "all"
+                    elif "\\important" in flag_lower:
+                        role = "important"
                     elif "\\flagged" in flag_lower or "\\starred" in flag_lower:
                         role = "flagged"
                     else:
-                        # 3. Known names
-                        role = None
-                        for candidate in (name, remote_id):
-                            if candidate in _FOLDER_ROLE:
-                                role = _FOLDER_ROLE[candidate]
-                                break
-                            for k, v in _FOLDER_ROLE.items():
-                                if k.lower() == candidate.lower():
-                                    role = v
-                                    break
-                            if role:
-                                break
-                        if not role:
-                            role = "other"
+                        # 3. Known names (case-insensitive, stripping [Gmail]/ namespace)
+                        role = _match_known_folder_role(
+                            name,
+                            remote_id,
+                            delim=delim,
+                            parent_remote_id=parent_remote_id,
+                        )
 
                 folders.append(
                     RemoteFolder(

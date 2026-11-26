@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.queries import list_folder_stats_for_account, unified_inbox
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState
 from mail_core.mail.domain.folder_views import CONTAINER, VIEW
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation
 from mail_core.providers.base import MetadataPage, RemoteMessageMeta
@@ -49,7 +49,7 @@ def test_label_membership_becomes_location_and_views_return_real_counts():
             name="INBOX",
             role="inbox",
             kind=CONTAINER,
-            sync_status=SyncStatus.IDLE.value,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         important = Folder(
             account_id=account.id,
@@ -57,7 +57,7 @@ def test_label_membership_becomes_location_and_views_return_real_counts():
             name="重要邮件",
             role="important",
             kind=VIEW,
-            sync_status=SyncStatus.IDLE.value,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         all_mail = Folder(
             account_id=account.id,
@@ -65,7 +65,7 @@ def test_label_membership_becomes_location_and_views_return_real_counts():
             name="所有邮件",
             role="all",
             kind=VIEW,
-            sync_status=SyncStatus.IDLE.value,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         session.add_all([inbox, important, all_mail])
         session.flush()
@@ -107,47 +107,109 @@ def test_label_membership_becomes_location_and_views_return_real_counts():
 
 
 def test_view_labels_only_migrate_for_gmail_accounts_and_are_idempotent():
+    """t092: 0004 迁移依赖已被 0007 移除的 folders.sync_status 列；在隔离的 0004 临时库验证幂等性。"""
     import importlib
+    import os
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.pool import NullPool
 
     migration = importlib.import_module(
         "mail_core.db.alembic.versions.20261123_0004_gmail_label_views"
     )
-    Session = get_session_factory()
-    with Session() as session:
-        gmail = Account(email=f"mig-gmail-{uuid.uuid4().hex[:8]}@gmail.com", provider="imap")
-        other = Account(email=f"mig-other-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
-        session.add_all([gmail, other])
-        session.flush()
-        gmail_folder = Folder(
-            account_id=gmail.id,
-            remote_id="[Gmail]/All Mail",
-            name="All Mail",
-            role="all",
-            kind=CONTAINER,
-            sync_status=SyncStatus.PAUSED.value,
-        )
-        other_folder = Folder(
-            account_id=other.id,
-            remote_id="custom-all",
-            name="All",
-            role="all",
-            kind=CONTAINER,
-            sync_status=SyncStatus.PAUSED.value,
-        )
-        session.add_all([gmail_folder, other_folder])
-        session.flush()
-        before = len(session.scalars(select(Message)).all())
+    root = Path(__file__).resolve().parents[2]
+    parsed = make_url(os.environ["MAIL_CORE_DATABASE_URL"])
+    db_name = f"kkmail_mig0004_{uuid.uuid4().hex[:16]}"
+    admin_url = parsed.set(database="postgres").render_as_string(hide_password=False)
+    temp_url = parsed.set(database=db_name).render_as_string(hide_password=False)
+    admin = create_engine(admin_url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+    target = create_engine(temp_url, poolclass=NullPool)
+    cfg = Config(str(root / "src/mail_core/db/alembic.ini"))
+    cfg.set_main_option("script_location", str(root / "src/mail_core/db/alembic"))
+    cfg.set_main_option("sqlalchemy.url", temp_url.replace("%", "%%"))
 
-        session.execute(migration.view_update_statement("view", "idle"))
-        session.execute(migration.view_update_statement("view", "idle"))
-        session.flush()
-        session.expire_all()
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+        command.upgrade(cfg, "20261123_0004")
 
-        assert session.get(Folder, gmail_folder.id).kind == VIEW
-        assert session.get(Folder, gmail_folder.id).sync_status == SyncStatus.IDLE.value
-        assert session.get(Folder, other_folder.id).kind == CONTAINER
-        assert session.get(Folder, other_folder.id).sync_status == SyncStatus.PAUSED.value
-        assert len(session.scalars(select(Message)).all()) == before
+        gmail_id = uuid.uuid4()
+        other_id = uuid.uuid4()
+        gmail_folder_id = uuid.uuid4()
+        other_folder_id = uuid.uuid4()
+        with target.begin() as conn:
+            conn.execute(
+                text("INSERT INTO accounts (id, email, provider) VALUES (:id, :email, 'imap')"),
+                [
+                    {"id": gmail_id, "email": f"mig-gmail-{uuid.uuid4().hex[:8]}@gmail.com"},
+                    {"id": other_id, "email": f"mig-other-{uuid.uuid4().hex[:8]}@example.com"},
+                ],
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO folders (id, account_id, remote_id, name, role, kind, sync_status) "
+                    "VALUES (:id, :aid, :rid, :name, :role, :kind, :status)"
+                ),
+                [
+                    {
+                        "id": gmail_folder_id,
+                        "aid": gmail_id,
+                        "rid": "[Gmail]/All Mail",
+                        "name": "All Mail",
+                        "role": "all",
+                        "kind": CONTAINER,
+                        "status": "paused",
+                    },
+                    {
+                        "id": other_folder_id,
+                        "aid": other_id,
+                        "rid": "custom-all",
+                        "name": "All",
+                        "role": "all",
+                        "kind": CONTAINER,
+                        "status": "paused",
+                    },
+                ],
+            )
+            conn.execute(migration.view_update_statement("view", "idle"))
+            conn.execute(migration.view_update_statement("view", "idle"))
+
+            gmail_row = (
+                conn.execute(
+                    text("SELECT kind, sync_status FROM folders WHERE id = :id"),
+                    {"id": gmail_folder_id},
+                )
+                .mappings()
+                .one()
+            )
+            other_row = (
+                conn.execute(
+                    text("SELECT kind, sync_status FROM folders WHERE id = :id"),
+                    {"id": other_folder_id},
+                )
+                .mappings()
+                .one()
+            )
+            assert gmail_row["kind"] == VIEW
+            assert gmail_row["sync_status"] == "idle"
+            assert other_row["kind"] == CONTAINER
+            assert other_row["sync_status"] == "paused"
+            assert conn.execute(text("SELECT count(*) FROM messages")).scalar_one() == 0
+    finally:
+        target.dispose()
+        with admin.connect() as conn:
+            conn.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :db AND pid <> pg_backend_pid()"
+                ),
+                {"db": db_name},
+            )
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        admin.dispose()
 
 
 def test_label_mapping_is_derived_from_db_when_not_supplied():
@@ -197,7 +259,7 @@ def test_empty_view_reports_real_zero_counts():
             name="All Mail",
             role="all",
             kind=VIEW,
-            sync_status=SyncStatus.IDLE.value,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         session.add(all_mail)
         session.flush()

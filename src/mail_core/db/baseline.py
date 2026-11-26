@@ -45,7 +45,7 @@ LOG = logging.getLogger("migrate_to_unified_baseline")
 UNIFIED_BASELINE_REVISION = "20261107_0001"
 # The current Alembic head.  A database still stamped at the unified baseline
 # must be upgraded to this head before its schema matches the ORM.
-CURRENT_HEAD_REVISION = "20261125_0006"
+CURRENT_HEAD_REVISION = "20261126_0007"
 
 CORE_CRITICAL_TABLES: frozenset[str] = frozenset({
     "accounts",

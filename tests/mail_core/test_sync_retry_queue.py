@@ -371,7 +371,8 @@ def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monke
             remote_id="Other",
             name="其他文件夹",
             role="other",
-            sync_status="idle",
+            selectable=True,
+            remote_state="active",
         )
         message = Message(account_id=account.id, remote_id="preserved-message", subject="keep")
         session.add_all([parent, message])
@@ -429,7 +430,8 @@ def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monke
     with Session() as session:
         parent = session.get(Folder, parent_id)
         assert parent is not None
-        assert parent.sync_status == "paused"
+        assert parent.selectable is False
+        assert parent.remote_state == "active"
         assert session.get(Message, message_id) is not None
         assert session.scalar(
             select(MessageLocation.id).where(
@@ -449,7 +451,8 @@ def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monke
             row for row in list_folder_stats_for_account(session, account_id)
             if row["folder_id"] == str(parent_id)
         )
-        assert parent_stats["sync_status"] == "paused"
+        assert parent_stats["kind"] == "container"
+        assert parent_stats["selectable"] is False
         assert parent_stats["total_count"] is None
         assert parent_stats["unread_count"] is None
         child_jobs = list(
@@ -507,7 +510,8 @@ def test_folder_discovery_pauses_missing_remote_and_deduplicates_metadata_job(mo
             remote_id="Deleted/Remote",
             name="Old folder",
             role="other",
-            sync_status="idle",
+            selectable=True,
+            remote_state="active",
         )
         message = Message(account_id=account.id, remote_id="kept-message", subject="Keep")
         session.add_all([missing, message])
@@ -536,7 +540,8 @@ def test_folder_discovery_pauses_missing_remote_and_deduplicates_metadata_job(mo
 
     with Session() as session:
         missing = session.get(Folder, missing_id)
-        assert missing is not None and missing.sync_status == "paused"
+        # t092: 远端缺失目录收敛为 remote_state="missing"（替代旧 paused sync_status）
+        assert missing is not None and missing.remote_state == "missing"
         assert session.get(Message, message_id) is not None
         assert session.scalar(
             select(MessageLocation.id).where(

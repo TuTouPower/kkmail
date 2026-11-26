@@ -148,7 +148,7 @@ def _seed_patrol_failure(*, failures: int):
         )
         session.add(
             Folder(id=folder_id, account_id=account_id, remote_id="Sent", name="Sent",
-                   role="sent", sync_status="idle")
+                   role="sent", remote_state="active")
         )
         session.flush()
         session.add(
@@ -221,7 +221,7 @@ def test_s7_patrol_upsert_survives_concurrent_first_probe():
         )
         session.add(
             Folder(id=folder_id, account_id=account_id, remote_id="Sent", name="Sent",
-                   role="sent", sync_status="idle")
+                   role="sent", remote_state="active")
         )
         session.flush()
         session.add(
@@ -270,7 +270,7 @@ def test_s7_patrol_creates_status_when_absent():
         )
         session.add(
             Folder(id=folder_id, account_id=account_id, remote_id="Sent", name="Sent",
-                   role="sent", sync_status="idle")
+                   role="sent", remote_state="active")
         )
         session.commit()
 

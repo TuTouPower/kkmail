@@ -45,10 +45,14 @@ def test_resolve_imap_trash_folder():
     mock_session = MagicMock()
 
     # 1. Exactly one trash folder
-    mock_trash = Folder(account_id=account_id, remote_id="INBOX.Deleted Items", role="trash", sync_status="idle")
+    mock_trash = Folder(account_id=account_id, remote_id="INBOX.Deleted Items", role="trash", selectable=True, remote_state="active")
     mock_session.scalars.return_value.all.return_value = [mock_trash]
     resolved = _resolve_imap_trash_folder(mock_session, account_id)
     assert resolved == "INBOX.Deleted Items"
+    compiled_sql = str(mock_session.scalars.call_args.args[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "folders.selectable IS true" in compiled_sql
+    assert "folders.remote_state = 'active'" in compiled_sql
+    assert "folders.kind = 'container'" in compiled_sql
 
     # 2. No trash folder -> raises
     mock_session.scalars.return_value.all.return_value = []
@@ -56,7 +60,7 @@ def test_resolve_imap_trash_folder():
         _resolve_imap_trash_folder(mock_session, account_id)
 
     # 3. Multiple trash folders -> raises
-    mock_trash2 = Folder(account_id=account_id, remote_id="Trash2", role="trash", sync_status="idle")
+    mock_trash2 = Folder(account_id=account_id, remote_id="Trash2", role="trash", selectable=True, remote_state="active")
     mock_session.scalars.return_value.all.return_value = [mock_trash, mock_trash2]
     with pytest.raises(UnaddressableMessageError, match="multiple ambiguous"):
         _resolve_imap_trash_folder(mock_session, account_id)

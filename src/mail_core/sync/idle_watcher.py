@@ -41,8 +41,7 @@ from typing import Any, Callable
 
 from sqlalchemy import func, select
 
-from mail_core.mail.domain.enums import ExecutionOrigin, JobType, SyncStatus
-from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
+from mail_core.mail.domain.enums import ExecutionOrigin, FolderRemoteState, JobType
 from mail_core.mail.storage.models import (
     Account,
     AppSetting,
@@ -50,6 +49,7 @@ from mail_core.mail.storage.models import (
     Message,
     MessageLocation,
     SyncCheckpoint,
+    syncable_folder_clauses,
 )
 from mail_core.providers.base import IdleNotSupportedError
 from mail_core.sync.jobs import enqueue_job
@@ -386,7 +386,7 @@ class IdleWatcherManager:
                         Account.sync_enabled.is_(True),
                         Account.provider == "imap",
                         Folder.role == "inbox",
-                        Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value,
+                        *syncable_folder_clauses(),
                         SyncCheckpoint.full_scan_complete.is_(True),
                     )
                 ).all()
@@ -419,6 +419,7 @@ class IdleWatcherManager:
                     .where(
                         Folder.account_id.in_(account_ids),
                         Folder.id.notin_(inbox_folder_ids),
+                        Folder.remote_state == FolderRemoteState.ACTIVE.value,
                     )
                     .group_by(Folder.account_id)
                 ).all()
@@ -462,7 +463,9 @@ class IdleWatcherManager:
                 remote_id=folder.remote_id,
                 name=folder.name,
                 role=folder.role,
-                sync_status=folder.sync_status,
+                kind=folder.kind,
+                selectable=folder.selectable,
+                remote_state=folder.remote_state,
             )
         watch = _Watch(
             account_id=candidate.account_id,

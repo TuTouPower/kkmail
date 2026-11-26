@@ -14,9 +14,24 @@ from pydantic import BaseModel
 from sqlalchemy import and_, case, cast, distinct, func, or_, select, String
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import ConnectivityState, CredentialState
-from mail_core.mail.domain.folder_views import CONTAINER, EXCLUDED_FROM_ALL_VIEW_ROLES, is_view_folder
-from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
+from mail_core.mail.domain.enums import ConnectivityState, CredentialState, FolderRemoteState
+from mail_core.mail.domain.folder_views import (
+    CONTAINER,
+    EXCLUDED_FROM_ALL_VIEW_ROLES,
+    is_important_view,
+    is_view_folder,
+)
+from mail_core.mail.storage.models import (
+    Account,
+    AccountGroup,
+    Attachment,
+    Folder,
+    FolderStats,
+    Message,
+    MessageBody,
+    MessageLocation,
+    active_folder_clause,
+)
 
 _BODY_PREVIEW_SOURCE_CHARS = 4096
 
@@ -114,7 +129,7 @@ def _folder_locations_by_message_ids(
         select(MessageLocation.message_id, Folder.id, Folder.role)
         .join(Message, Message.id == MessageLocation.message_id)
         .join(Folder, and_(Folder.id == MessageLocation.folder_id, Folder.account_id == Message.account_id))
-        .where(MessageLocation.message_id.in_(message_ids))
+        .where(MessageLocation.message_id.in_(message_ids), active_folder_clause())
         .order_by(MessageLocation.message_id, Folder.id)
     ).all()
     for message_id, folder_id, role in rows:
@@ -202,13 +217,14 @@ def get_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStats | No
 
 def view_scope_folder_ids(session: Session, folder: Folder) -> list[uuid.UUID]:
     """Physical folders whose locations project into a derived view."""
-    if folder.role == "important":
+    if is_important_view(folder):
         return [folder.id]
     return list(
         session.scalars(
             select(Folder.id).where(
                 Folder.account_id == folder.account_id,
                 Folder.kind == CONTAINER,
+                active_folder_clause(),
                 Folder.role.notin_(EXCLUDED_FROM_ALL_VIEW_ROLES),
             )
         )
@@ -246,7 +262,7 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
     rows = session.execute(
         select(Folder, FolderStats)
         .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
-        .where(Folder.account_id == account_id)
+        .where(Folder.account_id == account_id, active_folder_clause())
         .order_by(Folder.name.asc())
     ).all()
     out = []
@@ -255,6 +271,9 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
             view_total, view_unread = view_stats(session, folder)
             total_count: int | None = view_total
             unread_count: int | None = view_unread
+        elif not folder.selectable:
+            total_count = None
+            unread_count = None
         else:
             total_count = stats.total_count if stats else None
             unread_count = stats.unread_count if stats else None
@@ -264,7 +283,8 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
                 "remote_id": folder.remote_id,
                 "name": folder.name,
                 "role": folder.role,
-                "sync_status": folder.sync_status,
+                "kind": folder.kind,
+                "selectable": bool(folder.selectable),
                 "parent_remote_id": folder.parent_remote_id,
                 "total_count": total_count,
                 "unread_count": unread_count,
@@ -376,7 +396,7 @@ def unified_inbox(
             raise LookupError(f"folder {folder_id} does not belong to specified account")
         folder_ids = view_scope_folder_ids(session, folder) if is_view_folder(folder) else [folder.id]
     else:
-        stmt = select(Folder.id).where(Folder.role == folder_role)
+        stmt = select(Folder.id).where(Folder.role == folder_role, active_folder_clause())
         if account_ids is not None:
             stmt = stmt.where(Folder.account_id.in_(account_ids))
         folder_ids = expand_view_folder_ids(session, list(session.scalars(stmt).all()))
@@ -533,7 +553,13 @@ def _query_inbox_stats(
             Account.connectivity_state.label("connectivity_state"),
         )
         .select_from(Account)
-        .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
+        .outerjoin(
+            Folder,
+            (Folder.account_id == Account.id)
+            & (Folder.role == folder_role)
+            & (Folder.remote_state == FolderRemoteState.ACTIVE.value)
+            & Folder.selectable.is_(True),
+        )
         .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
         .group_by(Account.id, Account.sync_enabled, Account.credential_state, Account.connectivity_state)
         .where(Account.sync_enabled.is_(True))

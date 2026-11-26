@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from mail_core.blobs.archive import run_archive_batch
 from mail_core.db.session import get_session_factory
-from mail_core.mail.domain.enums import ArchiveState, JobType, SyncStatus
+from mail_core.mail.domain.enums import ArchiveState, FolderRemoteState, JobType
 from mail_core.mail.storage.models import Account, Folder, Message, MessageArchiveState, MessageBody, SyncCheckpoint, WorkerJob
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 from mail_core.sync.delta import sync_folder_delta
@@ -40,7 +40,7 @@ def _seed_account_with_checkpoint(session) -> tuple[uuid.UUID, uuid.UUID]:
         remote_id=f"remote-{uuid.uuid4().hex[:6]}",
         name="Inbox",
         role="inbox",
-        sync_status=SyncStatus.IDLE.value,
+        remote_state=FolderRemoteState.ACTIVE.value,
     )
     session.add(folder)
     session.flush()

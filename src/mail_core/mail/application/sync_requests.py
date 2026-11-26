@@ -13,8 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.accounts import enabled_account_ids
-from mail_core.mail.domain.enums import ExecutionOrigin, JobType, SyncStatus
-from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
+from mail_core.mail.domain.enums import ExecutionOrigin, JobType
+from mail_core.mail.domain.folder_views import is_syncable_folder
 from mail_core.mail.storage.models import (
     Account,
     AccountGroup,
@@ -24,6 +24,7 @@ from mail_core.mail.storage.models import (
     SyncRequest,
     SyncRequestTarget,
     WorkerJob,
+    syncable_folder_clauses,
 )
 from mail_core.sync.context import sync_request_payload
 from mail_core.sync.execution import bind_target
@@ -213,16 +214,10 @@ def resolve_sync_targets(
         folder = session.get(Folder, folder_id)
         if folder is None or folder.account_id not in acc_ids:
             raise LookupError("folder not found in account scope")
-        if is_view_folder(folder) or folder.sync_status == SyncStatus.PAUSED.value:
-            # Non-selectable folders are excluded from synchronization
-            # everywhere else in the system: role resolution below filters
-            # them out, and the execution layer completes their jobs as
-            # "skipped" (folder_not_selectable). They are paused by design
-            # (Gmail virtual labels, \Noselect structure nodes, remotely
-            # vanished folders) yet remain navigable views, so an explicit
-            # id pointing at one resolves to an empty target set — the
-            # request completes with zero targets — instead of a 422 the
-            # UI's routine navigation sync cannot act on (p060).
+        if not is_syncable_folder(folder):
+            # Derived views, \Noselect structural nodes, and vanished folders
+            # are excluded from sync target resolution (explicit ID returns
+            # zero targets instead of surfacing raw 422 errors).
             return []
         key = f"account:{folder.account_id}:folder:{folder_id}:role:{folder.role or 'all'}"
         return [
@@ -239,7 +234,7 @@ def resolve_sync_targets(
             select(Folder)
             .where(Folder.account_id.in_(acc_ids))
             .where(Folder.role == "inbox")
-            .where(Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value)
+            .where(*syncable_folder_clauses())
         ).all():
             inbox_by_account.setdefault(f.account_id, f)
         inbox_ids = [f.id for f in inbox_by_account.values()]
@@ -256,7 +251,7 @@ def resolve_sync_targets(
                     select(Folder)
                     .where(Folder.account_id == aid)
                     .where(Folder.role == folder_role)
-                    .where(Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value)
+                    .where(*syncable_folder_clauses())
                 ).all()
             )
             for f in role_folders:

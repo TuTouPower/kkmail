@@ -33,7 +33,7 @@ from mail_core.mail.domain.enums import (
     JobStatus,
     JobType,
     RemoteOperationStatus,
-    SyncStatus,
+    FolderRemoteState,
 )
 from mail_core.mail.domain.failures import (
     FailureDomain,
@@ -206,7 +206,7 @@ def _seed_pg_account_and_inbox(Session: Any) -> tuple[uuid.UUID, uuid.UUID]:
         session.flush()
         inbox = Folder(
             id=uuid.uuid4(), account_id=acc.id, remote_id="INBOX",
-            name="INBOX", role="inbox", sync_status=SyncStatus.IDLE.value,
+            name="INBOX", role="inbox", remote_state=FolderRemoteState.ACTIVE.value,
         )
         session.add(inbox)
         session.flush()

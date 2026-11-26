@@ -25,9 +25,15 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import ExecutionOrigin, JobType, SyncStatus
+from mail_core.mail.domain.enums import ExecutionOrigin, JobType
 from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
-from mail_core.mail.storage.models import Account, Folder, FolderPatrolStatus, SyncCheckpoint
+from mail_core.mail.storage.models import (
+    Account,
+    Folder,
+    FolderPatrolStatus,
+    SyncCheckpoint,
+    syncable_folder_clauses,
+)
 from mail_core.providers.base import FolderStatus
 from mail_core.sync.jobs import enqueue_job
 
@@ -117,7 +123,7 @@ def schedule_folder_status_patrol(
             )
             .where(
                 Account.sync_enabled.is_(True),
-                Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value,
+                *syncable_folder_clauses(),
                 Folder.role != "inbox",
             )
             .order_by(Account.id, Folder.id)

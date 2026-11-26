@@ -115,8 +115,10 @@ export interface StubFolder {
   folder_id: string
   role?: string
   name: string
-  total_count?: number
-  unread_count?: number
+  kind?: 'container' | 'view'
+  selectable?: boolean
+  total_count?: number | null
+  unread_count?: number | null
   remote_id?: string
   parent_remote_id?: string | null
 }
@@ -513,7 +515,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
         json: {
           account_id: accountId,
           folders: [
-            { folder_id: 'f-inbox', role: 'inbox', name: '收件箱', total_count: messages.length, unread_count: 1 },
+            { folder_id: 'f-inbox', role: 'inbox', name: '收件箱', kind: 'container', selectable: true, total_count: messages.length, unread_count: 1 },
           ],
         },
       })
@@ -525,7 +527,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
         json: {
           account_id: 'acc-00000000-0000-0000-0000-000000000001',
           folders: [
-            { folder_id: 'f-inbox', role: 'inbox', name: '收件箱', total_count: messages.length, unread_count: 1 },
+            { folder_id: 'f-inbox', role: 'inbox', name: '收件箱', kind: 'container', selectable: true, total_count: messages.length, unread_count: 1 },
           ],
         },
       })

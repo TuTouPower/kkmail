@@ -143,10 +143,11 @@ def test_migration_0006_backfills_execution_origin_and_roundtrips():
         command.upgrade(cfg, "20261124_0005")
         expected_rows = _seed_pre0006_rows(target)
 
-        assert CURRENT_HEAD_REVISION == "20261125_0006"
-        assert ScriptDirectory.from_config(cfg).get_heads() == ["20261125_0006"]
+        # t092: head 已推进至 20261126_0007；此历史迁移测试聚焦 0005 <-> 0006 边界往返
+        assert CURRENT_HEAD_REVISION >= "20261125_0006"
+        assert ScriptDirectory.from_config(cfg).get_heads() == [CURRENT_HEAD_REVISION]
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "20261125_0006")
         _verify_0006_upgrade_and_constraints(target, expected_rows)
 
         command.downgrade(cfg, "20261124_0005")
@@ -156,7 +157,7 @@ def test_migration_0006_backfills_execution_origin_and_roundtrips():
             checks = {c["name"] for c in inspect(conn).get_check_constraints("worker_jobs")}
             assert "ck_worker_jobs_execution_origin" not in checks
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "20261125_0006")
         with target.connect() as conn:
             assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261125_0006"
     finally:

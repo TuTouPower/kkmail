@@ -12,7 +12,7 @@ import pytest
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobType
-from mail_core.mail.storage.models import Account, Folder, SyncStatus, WorkerJob
+from mail_core.mail.storage.models import Account, Folder, WorkerJob
 from mail_core.providers.base import RemoteFolder
 from mail_core.providers.http import PermanentAuthError
 from mail_core.providers.imap import ImapProvider

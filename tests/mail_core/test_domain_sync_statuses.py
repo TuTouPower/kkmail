@@ -1,4 +1,4 @@
-from mail_core.mail.domain import SyncRunStatus, SyncStatus
+from mail_core.mail.domain import FolderRemoteState, FolderRole, SyncRunStatus
 from mail_core.mail.domain.enums import (
     ConnectivityState,
     CredentialState,
@@ -6,15 +6,27 @@ from mail_core.mail.domain.enums import (
 )
 
 
-def test_sync_status_values_match_persisted_folder_states():
-    # t076: SyncStatus 枚举仍存在，但仅用于 folders.sync_status；
-    # 账号健康已改由三个正交枚举表达（见下方新断言）。
-    assert {status.value for status in SyncStatus} == {
-        "idle",
-        "running",
-        "paused",
-        "failed",
-        "auth_failed",
+# t092: 旧 SyncStatus 枚举与 Folder.sync_status 列已被正交模型替换并移除；
+# 原 test_sync_status_values_match_persisted_folder_states 整体删除，新增
+# test_folder_role_and_remote_state_enums 覆盖新的域枚举与向后清理契约。
+def test_folder_role_and_remote_state_enums():
+    import mail_core.mail.domain as domain_pkg
+    import mail_core.mail.domain.enums as domain_enums
+
+    assert not hasattr(domain_pkg, "SyncStatus")
+    assert not hasattr(domain_enums, "SyncStatus")
+    assert {state.value for state in FolderRemoteState} == {"active", "missing"}
+    assert {role.value for role in FolderRole} == {
+        "inbox",
+        "junk",
+        "trash",
+        "sent",
+        "drafts",
+        "archive",
+        "all",
+        "flagged",
+        "important",
+        "other",
     }
 
 

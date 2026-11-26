@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from mail_core.api.app import app
 from mail_core.db.session import get_session_factory
-from mail_core.mail.domain.enums import JobType, SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState, JobType
 from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, SyncRequest, WorkerJob
 from tests.mail_core.conftest import TEST_API_KEY
 
@@ -40,7 +40,7 @@ def _seed_account_with_inbox() -> tuple[uuid.UUID, uuid.UUID]:
             remote_id="remote-inbox",
             name="Inbox",
             role="inbox",
-            sync_status=SyncStatus.IDLE.value,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         session.add(folder)
         session.flush()
@@ -173,7 +173,7 @@ def test_new_account_without_checkpoint_enqueues_full_metadata_baseline():
             remote_id="remote-new-inbox",
             name="Inbox",
             role="inbox",
-            sync_status=SyncStatus.IDLE.value,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         session.add(folder)
         session.commit()

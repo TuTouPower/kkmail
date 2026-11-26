@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import ExecutionOrigin, JobType, OutboxEventType
-from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
+from mail_core.mail.domain.folder_views import is_syncable_folder
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
-from mail_core.mail.storage.models import Account, AccountGroup, Folder, Message, MessageLocation, OutboxEvent
+from mail_core.mail.storage.models import (
+    Account,
+    AccountGroup,
+    Folder,
+    Message,
+    MessageLocation,
+    OutboxEvent,
+    active_folder_clause,
+    syncable_folder_clauses,
+)
 from mail_core.sync.jobs import enqueue_job
 
 MARK_ALL_READ_BATCH_SIZE = 500
@@ -47,20 +57,64 @@ class UnaddressableMessageError(ValueError):
     """Raised when an operation requires a provider ID that is unknown."""
 
 
-def _primary_location_sort_key(folder_role: str, folder_id: uuid.UUID) -> tuple[int, str]:
-    return (_PRIMARY_LOCATION_ROLE_PRIORITY.get(folder_role, len(_PRIMARY_LOCATION_ROLE_PRIORITY)), str(folder_id))
+def _primary_location_sort_key(
+    folder_role: str,
+    folder_id: uuid.UUID,
+    *,
+    syncable: bool = True,
+) -> tuple[int, int, str]:
+    return (
+        0 if syncable else 1,
+        _PRIMARY_LOCATION_ROLE_PRIORITY.get(folder_role, len(_PRIMARY_LOCATION_ROLE_PRIORITY)),
+        str(folder_id),
+    )
 
 
-def _primary_location(session: Session, message_id: uuid.UUID) -> tuple[Folder | None, MessageLocation | None]:
+def _resolve_primary_syncable_location(
+    session: Session, message_id: uuid.UUID
+) -> tuple[Folder | None, MessageLocation | None, bool]:
     rows = session.execute(
         select(MessageLocation, Folder)
         .join(Folder, MessageLocation.folder_id == Folder.id)
         .where(MessageLocation.message_id == message_id)
     ).all()
     if not rows:
-        return None, None
-    loc, folder = min(rows, key=lambda row: _primary_location_sort_key(row[1].role, row[1].id))
+        return None, None, False
+    syncable_rows = [(loc, folder) for loc, folder in rows if is_syncable_folder(folder)]
+    if not syncable_rows:
+        return None, None, True
+    loc, folder = min(
+        syncable_rows,
+        key=lambda row: _primary_location_sort_key(
+            row[1].role,
+            row[1].id,
+            syncable=True,
+        ),
+    )
+    return folder, loc, True
+
+
+def _primary_location(session: Session, message_id: uuid.UUID) -> tuple[Folder | None, MessageLocation | None]:
+    folder, loc, _has_locations = _resolve_primary_syncable_location(session, message_id)
     return folder, loc
+
+
+def _resolve_writeback_folder_remote(folder: Folder | None, *, has_locations: bool) -> str | None:
+    """Resolve remote writeback container: syncable folder, legacy 'INBOX' if unlocated, else None."""
+    if folder is not None:
+        return folder.remote_id
+    return None if has_locations else "INBOX"
+
+
+def _resolve_batch_writeback_folder_remote(
+    folders: list[tuple[uuid.UUID, str, str, bool]],
+) -> str | None:
+    """Resolve batch writeback container from per-message (folder_id, remote_id, role, syncable) rows."""
+    syncable = [row for row in folders if row[3]]
+    if not syncable:
+        return _resolve_writeback_folder_remote(None, has_locations=bool(folders))
+    chosen = min(syncable, key=lambda row: _primary_location_sort_key(row[2], row[0], syncable=True))
+    return chosen[1]
 
 
 def _all_location_folder_ids(session: Session, message_id: uuid.UUID) -> list[uuid.UUID]:
@@ -116,12 +170,13 @@ def set_message_read(
         raise LookupError("message not found")
     msg.is_read = is_read
     folder_ids = _all_location_folder_ids(session, message_id)
-    folder, _loc = _primary_location(session, message_id)
+    folder, _loc, has_locations = _resolve_primary_syncable_location(session, message_id)
+    target_folder_remote = _resolve_writeback_folder_remote(folder, has_locations=has_locations)
     operation_id = None
-    if _has_provider_remote_id(msg):
+    if _has_provider_remote_id(msg) and target_folder_remote is not None:
         desired = {
             "remote_id": msg.remote_id,
-            "folder_remote_id": folder.remote_id if folder else "INBOX",
+            "folder_remote_id": target_folder_remote,
             "is_read": is_read,
         }
         op = enqueue_remote_operation(
@@ -162,12 +217,13 @@ def set_message_flagged(
     if msg is None:
         raise LookupError("message not found")
     msg.is_flagged = is_flagged
-    folder, _loc = _primary_location(session, message_id)
+    folder, _loc, has_locations = _resolve_primary_syncable_location(session, message_id)
+    target_folder_remote = _resolve_writeback_folder_remote(folder, has_locations=has_locations)
     operation_id = None
-    if _has_provider_remote_id(msg):
+    if _has_provider_remote_id(msg) and target_folder_remote is not None:
         desired = {
             "remote_id": msg.remote_id,
-            "folder_remote_id": folder.remote_id if folder else "INBOX",
+            "folder_remote_id": target_folder_remote,
             "is_flagged": is_flagged,
         }
         op = enqueue_remote_operation(
@@ -199,14 +255,12 @@ def set_message_flagged(
 
 def _resolve_imap_trash_folder(session: Session, account_id: uuid.UUID) -> str:
     """Resolve the remote_id of the account's trash folder (role='trash')."""
-    from mail_core.mail.domain.enums import SyncStatus
-
     folders = list(
         session.scalars(
             select(Folder)
             .where(Folder.account_id == account_id)
             .where(Folder.role == "trash")
-            .where(Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value)
+            .where(*syncable_folder_clauses())
         ).all()
     )
     if len(folders) == 1:
@@ -235,27 +289,31 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     account = session.get(Account, msg.account_id)
 
     folder_ids = _all_location_folder_ids(session, message_id)
-    folder, _loc = _primary_location(session, message_id)
-    desired = {
-        "remote_id": msg.remote_id,
-        "folder_remote_id": folder.remote_id if folder else "INBOX",
-    }
-    # A11: only IMAP gets an explicit trash destination (the resolved
-    # role='trash' folder). Hardcoding "Trash" for every provider broke
-    # Graph accounts — Graph's trash folder is "deleteditems" — and the
-    # local row is deleted before the remote op runs, so the failure
-    # silently forked local and remote state. Non-IMAP providers apply
-    # their own default when the key is absent (Graph: "deleteditems").
-    if account and account.provider == "imap":
-        desired["trash_folder_remote_id"] = _resolve_imap_trash_folder(session, msg.account_id)
-    op = enqueue_remote_operation(
-        session,
-        account_id=msg.account_id,
-        entity_key=f"msg:{msg.remote_id}:trash",
-        op_type="trash",
-        desired_state=desired,
-        idempotency_key=f"{msg.id}:trash",
-    )
+    folder, _loc, has_locations = _resolve_primary_syncable_location(session, message_id)
+    target_folder_remote = _resolve_writeback_folder_remote(folder, has_locations=has_locations)
+    operation_id = None
+    if target_folder_remote is not None:
+        desired = {
+            "remote_id": msg.remote_id,
+            "folder_remote_id": target_folder_remote,
+        }
+        # A11: only IMAP gets an explicit trash destination (the resolved
+        # role='trash' folder). Hardcoding "Trash" for every provider broke
+        # Graph accounts — Graph's trash folder is "deleteditems" — and the
+        # local row is deleted before the remote op runs, so the failure
+        # silently forked local and remote state. Non-IMAP providers apply
+        # their own default when the key is absent (Graph: "deleteditems").
+        if account and account.provider == "imap":
+            desired["trash_folder_remote_id"] = _resolve_imap_trash_folder(session, msg.account_id)
+        op = enqueue_remote_operation(
+            session,
+            account_id=msg.account_id,
+            entity_key=f"msg:{msg.remote_id}:trash",
+            op_type="trash",
+            desired_state=desired,
+            idempotency_key=f"{msg.id}:trash",
+        )
+        operation_id = op.id
     account_id = msg.account_id
     session.add(
         OutboxEvent(
@@ -272,12 +330,13 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     session.delete(msg)
     session.flush()
     _recompute_stats_for_folders(session, account_id=account_id, folder_ids=folder_ids)
-    _wake_push(session, account_id)
+    if operation_id is not None:
+        _wake_push(session, account_id)
     session.flush()
     return MutationResult(
         message_id=message_id,
         account_id=account_id,
-        operation_id=op.id,
+        operation_id=operation_id,
     )
 
 
@@ -316,7 +375,7 @@ def _mark_all_read_query(
             select(Message)
             .join(MessageLocation, MessageLocation.message_id == Message.id)
             .join(Folder, MessageLocation.folder_id == Folder.id)
-            .where(Folder.role == (folder_role or "inbox"))
+            .where(Folder.role == (folder_role or "inbox"), active_folder_clause())
             .where(Message.is_read.is_(False))
         )
     if account_id is not None:
@@ -363,14 +422,23 @@ def mark_all_messages_read(
         return MarkAllReadBatchResult(count=0, last_message_id=None)
 
     loc_rows = session.execute(
-        select(MessageLocation.message_id, MessageLocation.folder_id, Folder.remote_id, Folder.role)
+        select(
+            MessageLocation.message_id,
+            MessageLocation.folder_id,
+            Folder.remote_id,
+            Folder.role,
+            Folder.kind,
+            Folder.selectable,
+            Folder.remote_state,
+        )
         .join(Folder, MessageLocation.folder_id == Folder.id)
         .where(MessageLocation.message_id.in_([m.id for m in messages]))
     ).all()
 
-    msg_folders: dict[uuid.UUID, list[tuple[uuid.UUID, str, str]]] = {}
-    for mid, fid, f_remote_id, role in loc_rows:
-        msg_folders.setdefault(mid, []).append((fid, f_remote_id or "INBOX", role))
+    msg_folders: dict[uuid.UUID, list[tuple[uuid.UUID, str, str, bool]]] = {}
+    for mid, fid, f_remote_id, role, kind, selectable, remote_state in loc_rows:
+        syncable = is_syncable_folder(SimpleNamespace(kind=kind, selectable=selectable, remote_state=remote_state))
+        msg_folders.setdefault(mid, []).append((fid, f_remote_id or "INBOX", role, syncable))
 
     affected_accounts: set[uuid.UUID] = set()
     remote_operation_accounts: set[uuid.UUID] = set()
@@ -380,15 +448,12 @@ def mark_all_messages_read(
         msg.is_read = True
         affected_accounts.add(msg.account_id)
         folders = msg_folders.get(msg.id, [])
-        folder_ids = [fid for fid, _remote_id, _role in folders]
-        primary = min(folders, key=lambda row: _primary_location_sort_key(row[2], row[0])) if folders else None
-        primary_folder_remote = primary[1] if primary else "INBOX"
+        folder_ids = [fid for fid, _remote_id, _role, _syncable in folders]
+        primary_folder_remote = _resolve_batch_writeback_folder_remote(folders)
 
-        if msg.account_id not in affected_folders_by_account:
-            affected_folders_by_account[msg.account_id] = set()
-        affected_folders_by_account[msg.account_id].update(folder_ids)
+        affected_folders_by_account.setdefault(msg.account_id, set()).update(folder_ids)
 
-        if _has_provider_remote_id(msg):
+        if _has_provider_remote_id(msg) and primary_folder_remote is not None:
             desired = {
                 "remote_id": msg.remote_id,
                 "folder_remote_id": primary_folder_remote,

@@ -889,6 +889,8 @@ export interface components {
              * Format: uuid
              */
             folder_id: string;
+            /** Kind */
+            kind: string;
             /** Name */
             name: string;
             /** Parent Remote Id */
@@ -897,8 +899,8 @@ export interface components {
             remote_id: string;
             /** Role */
             role: string;
-            /** Sync Status */
-            sync_status: string;
+            /** Selectable */
+            selectable: boolean;
             /** Total Count */
             total_count: number | null;
             /** Unread Count */

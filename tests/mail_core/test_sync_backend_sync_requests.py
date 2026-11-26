@@ -47,7 +47,7 @@ def _seed_accounts(Session, n: int, *, baseline: bool = True):
             )
             session.add(
                 Folder(id=fid, account_id=aid, remote_id="INBOX", name="INBOX",
-                       role="inbox", sync_status="idle")
+                       role="inbox", remote_state="active")
             )
             session.flush()
             if baseline:

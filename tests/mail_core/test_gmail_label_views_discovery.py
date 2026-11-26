@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState
 from mail_core.mail.domain.folder_views import CONTAINER, VIEW
 from mail_core.mail.storage.models import Account, Folder
 from mail_core.providers.base import RemoteFolder
@@ -108,7 +108,7 @@ def test_user_label_with_virtual_substring_stays_syncable(monkeypatch):
     by_remote = {f.remote_id: f for f in harness.folders}
     for folder in by_remote.values():
         assert folder.kind == CONTAINER
-        assert folder.sync_status == SyncStatus.IDLE.value
+        assert folder.remote_state == FolderRemoteState.ACTIVE.value
     enqueued_ids = {str(j["payload"]["folder_id"]) for j in harness.enqueued}
     assert str(by_remote["[Gmail]/重要客户"].id) in enqueued_ids
 
@@ -126,5 +126,5 @@ def test_exact_virtual_labels_become_idle_views_without_jobs(monkeypatch):
     assert len(harness.folders) == 4
     for folder in harness.folders:
         assert folder.kind == VIEW, folder.remote_id
-        assert folder.sync_status == SyncStatus.IDLE.value, folder.remote_id
+        assert folder.remote_state == FolderRemoteState.ACTIVE.value, folder.remote_id
     assert harness.enqueued == []

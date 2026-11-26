@@ -21,7 +21,7 @@ from mail_core.mail.domain.enums import (
     ExecutionOrigin,
     JobStatus,
     JobType,
-    SyncStatus,
+    FolderRemoteState,
 )
 from mail_core.mail.storage.models import (
     Account,
@@ -65,7 +65,7 @@ def _seed_account(session, *, full_scan: bool = True) -> tuple[uuid.UUID, uuid.U
         name="INBOX",
         role="inbox",
         kind="container",
-        sync_status=SyncStatus.IDLE.value,
+        remote_state=FolderRemoteState.ACTIVE.value,
     )
     sent = Folder(
         id=uuid.uuid4(),
@@ -74,7 +74,7 @@ def _seed_account(session, *, full_scan: bool = True) -> tuple[uuid.UUID, uuid.U
         name="SENT",
         role="sent",
         kind="container",
-        sync_status=SyncStatus.IDLE.value,
+        remote_state=FolderRemoteState.ACTIVE.value,
     )
     session.add_all([inbox, sent])
     session.flush()

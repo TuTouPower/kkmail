@@ -19,7 +19,7 @@ import pytest
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import create_sync_request, resolve_sync_targets
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState
 from mail_core.mail.domain.folder_views import CONTAINER, VIEW
 from mail_core.mail.storage.models import Account, Folder
 
@@ -47,7 +47,7 @@ def _seed(Session) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
                     name="INBOX",
                     role="inbox",
                     kind=CONTAINER,
-                    sync_status=SyncStatus.IDLE.value,
+                    remote_state=FolderRemoteState.ACTIVE.value,
                 ),
                 Folder(
                     id=important_id,
@@ -56,7 +56,7 @@ def _seed(Session) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
                     name="Important",
                     role="important",
                     kind=VIEW,
-                    sync_status=SyncStatus.IDLE.value,
+                    remote_state=FolderRemoteState.ACTIVE.value,
                 ),
             ]
         )
@@ -100,7 +100,7 @@ def test_explicit_folder_outside_account_scope_still_404():
                 remote_id="INBOX",
                 name="INBOX",
                 role="inbox",
-                sync_status=SyncStatus.IDLE.value,
+                remote_state=FolderRemoteState.ACTIVE.value,
             )
         )
         session.commit()

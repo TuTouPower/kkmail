@@ -19,13 +19,17 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.folder_views import (
-    CONTAINER,
     EXCLUDED_FROM_ALL_VIEW_ROLES,
     IMPORTANT_VIEW_REMOTE_IDS,
     VIEW,
     is_gmail_account,
 )
-from mail_core.mail.storage.models import Account, Folder
+from mail_core.mail.storage.models import (
+    Account,
+    Folder,
+    active_folder_clause,
+    syncable_folder_clauses,
+)
 from mail_core.providers.connection_slots import TrafficClass
 from mail_core.providers.factory import build_provider
 from mail_core.security.credentials import CredentialStore, get_credential_store
@@ -60,11 +64,14 @@ class BackfillResult:
 
 def _important_view_id(session: Session, account_id: uuid.UUID) -> uuid.UUID | None:
     return session.scalar(
-        select(Folder.id).where(
+        select(Folder.id)
+        .where(
             Folder.account_id == account_id,
             Folder.kind == VIEW,
+            active_folder_clause(),
             or_(Folder.role == "important", Folder.remote_id.in_(IMPORTANT_VIEW_REMOTE_IDS)),
         )
+        .order_by(Folder.id.asc())
     )
 
 
@@ -93,9 +100,8 @@ def backfill_account(
             session.execute(
                 select(Folder.id, Folder.remote_id).where(
                     Folder.account_id == account_id,
-                    Folder.kind == CONTAINER,
+                    *syncable_folder_clauses(),
                     Folder.role.notin_(EXCLUDED_FROM_ALL_VIEW_ROLES),
-                    Folder.sync_status != "paused",
                 )
             ).all()
         )

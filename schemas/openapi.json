@@ -87,6 +87,10 @@
             "title": "Folder Id",
             "type": "string"
           },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -110,9 +114,9 @@
             "title": "Role",
             "type": "string"
           },
-          "sync_status": {
-            "title": "Sync Status",
-            "type": "string"
+          "selectable": {
+            "title": "Selectable",
+            "type": "boolean"
           },
           "total_count": {
             "anyOf": [
@@ -140,8 +144,9 @@
         "required": [
           "folder_id",
           "role",
+          "kind",
+          "selectable",
           "name",
-          "sync_status",
           "total_count",
           "unread_count",
           "remote_id"
