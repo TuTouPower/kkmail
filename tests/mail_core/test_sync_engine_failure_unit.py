@@ -71,7 +71,7 @@ def test_folder_listing_failure_releases_lease_once_without_touching_account_hea
     monkeypatch.setattr(engine, "release_lease", release_once)
 
     with pytest.raises(ValueError, match="folder listing failed"):
-        engine.sync_account_folders(account.id, worker_id="worker-a139", store=object())
+        engine.sync_account_folders(account.id, worker_id="worker-a139", store=object(), execution_origin="foreground")
 
     assert len(sessions) == 2
     assert [session.commits for session in sessions] == [1, 1]

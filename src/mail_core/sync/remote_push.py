@@ -11,7 +11,14 @@ from sqlalchemy import and_, func, or_, select
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
-from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, RemoteOperationStatus
+from mail_core.mail.domain.enums import (
+    ExecutionOrigin,
+    JobStatus,
+    JobType,
+    OutboxEventType,
+    RemoteOperationStatus,
+    normalize_execution_origin,
+)
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, RemoteOperation
 from mail_core.providers.connection_slots import (
@@ -21,9 +28,9 @@ from mail_core.providers.connection_slots import (
     is_capacity_error,
 )
 from mail_core.providers.factory import build_provider
-from mail_core.providers.http import ProviderHttpError, RateLimitedError
+from mail_core.providers.http import AmbiguousOutcomeError, ProviderHttpError, RateLimitedError
 from mail_core.providers.remote_writeback import OP_MOVE, OP_TRASH, normalize_op_type
-from mail_core.security.redact import safe_provider_summary
+from mail_core.mail.domain.failures import FailureDomain, FailurePhase, StructuredFailure
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
     FencingMismatch,
@@ -83,23 +90,6 @@ _RATE_LIMIT_ERROR_PREFIXES = (
 
 class RemoteIdentityConflict(ValueError):
     """The provider returned a remote id already owned by another local message."""
-
-
-def _coerce_status_code(value: object) -> int | None:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, str) and len(value) == 3 and value.isascii() and value.isdigit():
-        return int(value)
-    return None
-
-
-def _exception_status_code(exc: Exception) -> int | None:
-    status = getattr(exc, "status", None)
-    if status is None:
-        status = getattr(exc, "status_code", None)
-    if status is None and hasattr(exc, "response"):
-        status = getattr(getattr(exc, "response"), "status_code", None)
-    return _coerce_status_code(status)
 
 
 def _error_text_status_code(err_msg: str) -> int | None:
@@ -201,6 +191,7 @@ def _persist_move_remote_state(
         enqueue_job(
             session,
             job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+            execution_origin=ExecutionOrigin.BACKGROUND,
             account_id=account_id,
             payload={},
             priority=50,
@@ -257,34 +248,53 @@ def _persist_move_remote_state(
     return True
 
 
+def _is_transient_failure(parsed: StructuredFailure) -> bool:
+    if parsed.error_type == "AmbiguousOutcomeError":
+        return False
+    if _is_transient_status(parsed.http_status):
+        return True
+    if parsed.domain in (FailureDomain.TRANSPORT, FailureDomain.CONTROL):
+        return True
+    return parsed.phase in (
+        FailurePhase.DNS,
+        FailurePhase.PROXY_CONNECT,
+        FailurePhase.TCP_CONNECT,
+        FailurePhase.TLS,
+    )
+
+
+def _is_transient_exception(exc: Exception) -> bool:
+    return _is_transient_failure(StructuredFailure.from_exception(exc))
+
+
+def _is_transient_text(err_msg: str) -> bool:
+    parsed = StructuredFailure.from_text(err_msg)
+    if _is_transient_failure(parsed):
+        return True
+    if _is_transient_status(_error_text_status_code(err_msg)):
+        return True
+    return any(pattern.match(err_msg.strip()) for pattern in _TRANSIENT_ERROR_PREFIXES)
+
+
 def is_transient_error(exc: Exception | None = None, err_msg: str | None = None) -> bool:
     if exc is not None:
-        if isinstance(exc, RateLimitedError):
-            return True
-        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-            return True
-        status_code = _exception_status_code(exc)
-        if status_code is not None:
-            return _is_transient_status(status_code)
-        name = type(exc).__name__.lower()
-        if any(term in name for term in ("timeout", "connect", "network", "socket")):
-            return True
+        return _is_transient_exception(exc)
     if err_msg:
-        if _is_transient_status(_error_text_status_code(err_msg)):
-            return True
-        if any(pattern.match(err_msg.strip()) for pattern in _TRANSIENT_ERROR_PREFIXES):
-            return True
+        return _is_transient_text(err_msg)
     return False
 
 
 def is_rate_limited_error(exc: Exception | None = None, err_msg: str | None = None) -> bool:
     if exc is not None:
-        if isinstance(exc, RateLimitedError):
+        parsed_exc = StructuredFailure.from_exception(exc)
+        if parsed_exc.error_type == "RateLimitedError" or parsed_exc.domain is FailureDomain.CONTROL:
             return True
-        status_code = _exception_status_code(exc)
-        if status_code is not None:
-            return status_code == 429
+        if parsed_exc.http_status is not None:
+            return parsed_exc.http_status == 429
     if err_msg:
+        parsed = StructuredFailure.from_text(err_msg)
+        if parsed.http_status == 429 or parsed.error_type == "RateLimitedError":
+            return True
         if _error_text_status_code(err_msg) == 429:
             return True
         if any(pattern.match(err_msg.strip()) for pattern in _RATE_LIMIT_ERROR_PREFIXES):
@@ -305,10 +315,38 @@ def get_retry_after_seconds(exc: Exception | None, fallback: float = 60.0) -> fl
     return max(1.0, min(fallback, 86400.0))
 
 
+def _resolve_push_op_failure(
+    caught_batch_exc: Exception | None,
+    result: object,
+) -> StructuredFailure | str | None:
+    """Resolve failure for persistence/retry without wiping non-structured business errors."""
+    if caught_batch_exc is not None:
+        return StructuredFailure.from_exception(caught_batch_exc)
+    embedded = getattr(result, "failure", None)
+    if isinstance(embedded, StructuredFailure):
+        return embedded
+    raw_err = getattr(result, "error", None)
+    if not raw_err:
+        return None
+    text = str(raw_err)
+    parsed = StructuredFailure.from_text(text)
+    is_matched = (
+        parsed.error_type != "ProviderError"
+        or parsed.safe_reason is not None
+        or parsed.domain is not FailureDomain.UNKNOWN
+        or parsed.phase is not None
+        or parsed.http_status is not None
+        or parsed.errno is not None
+        or parsed.symbolic_code is not None
+    )
+    return parsed if is_matched else text
+
+
 def push_remote_operations(
     account_id: uuid.UUID,
     *,
     worker_id: str,
+    execution_origin: ExecutionOrigin | str,
     store: CredentialStore | None = None,
     limit: int = 500,
     lease_ttl: timedelta = timedelta(seconds=120),
@@ -326,6 +364,7 @@ def push_remote_operations(
     """
     from mail_core.providers.base import RemoteOperationItem, RemoteOperationResult
 
+    origin = normalize_execution_origin(execution_origin)
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -379,6 +418,7 @@ def push_remote_operations(
                 enqueue_job(
                     session,
                     job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload={},
                     priority=40,
@@ -467,6 +507,7 @@ def push_remote_operations(
             followup = enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={},
                 priority=40,
@@ -526,8 +567,8 @@ def push_remote_operations(
                         results_map[it.op_id] = res
             except Exception as exc:  # noqa: BLE001
                 caught_batch_exc = exc
-                err_summary = safe_provider_summary(exc)
-                log.error("remote push batch failed: %s", err_summary)
+                failure = StructuredFailure.from_exception(exc)
+                log.error("remote push batch failed: %s", failure)
                 break
 
             # Heartbeat lease between chunks to prevent TTL expiration on large batches
@@ -570,6 +611,7 @@ def push_remote_operations(
             followup = enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={},
                 priority=40,
@@ -624,14 +666,15 @@ def push_remote_operations(
                 continue
 
             if caught_batch_exc is not None:
-                result = RemoteOperationResult(success=False, error=safe_provider_summary(caught_batch_exc))
+                failure = StructuredFailure.from_exception(caught_batch_exc)
+                result = RemoteOperationResult(success=False, error=failure.format(), failure=failure)
             else:
                 result = results_map.get(op_id)
                 if result is None:
                     result = RemoteOperationResult(success=False, error="operation unhandled in provider batch")
 
             ok = bool(result.success)
-            err = safe_provider_summary(result.error) if result.error else None
+            err = _resolve_push_op_failure(caught_batch_exc, result)
             remote_state = getattr(result, "remote_state", {}) or {}
 
             if ok:
@@ -646,7 +689,7 @@ def push_remote_operations(
                     )
                 except RemoteIdentityConflict as exc:
                     ok = False
-                    err = safe_provider_summary(exc)
+                    err = StructuredFailure.from_exception(exc)
 
             if ok:
                 applied = mark_remote_operation(
@@ -664,8 +707,11 @@ def push_remote_operations(
             else:
                 failed += 1
                 now_retry = datetime.now(timezone.utc)
+                err_text = err.format() if isinstance(err, StructuredFailure) else err
                 retry_after_sec = remote_state.get("retry_after") if isinstance(remote_state, dict) else None
-                is_rate_limit = (retry_after_sec is not None) or is_rate_limited_error(caught_batch_exc, err)
+                if retry_after_sec is None and isinstance(err, StructuredFailure):
+                    retry_after_sec = err.retry_after_s
+                is_rate_limit = (retry_after_sec is not None) or is_rate_limited_error(caught_batch_exc, err_text)
 
                 if is_rate_limit and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
                     delay = float(retry_after_sec or get_retry_after_seconds(caught_batch_exc, fallback=60.0))
@@ -678,7 +724,7 @@ def push_remote_operations(
                         next_attempt_at=next_attempt,
                     )
                     followup_needed = True
-                elif is_transient_error(caught_batch_exc, err) and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
+                elif is_transient_error(caught_batch_exc, err_text) and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
                     delay = min(3600, 2 ** max(0, int(op.attempts) - 1))
                     next_attempt = now_retry + timedelta(seconds=delay)
                     mark_remote_operation(
@@ -715,6 +761,7 @@ def push_remote_operations(
             enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={},
                 priority=40,
@@ -731,6 +778,7 @@ def push_remote_operations(
                 enqueue_job(
                     session,
                     job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload={},
                     priority=40,

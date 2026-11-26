@@ -85,6 +85,7 @@ def test_worker_transient_network_timeout_does_not_fail_account():
             account_id=account.id,
             payload={"folder_id": str(uuid.uuid4())},
             priority=50,
+            execution_origin="foreground",
         )
         job.status = JobStatus.CLAIMED.value
         job.locked_by = "test-worker"
@@ -137,6 +138,7 @@ def test_worker_permanent_auth_error_still_fails_and_disables_account():
             account_id=account.id,
             payload={"folder_id": str(uuid.uuid4())},
             priority=50,
+            execution_origin="foreground",
         )
         job.status = JobStatus.CLAIMED.value
         job.locked_by = "test-worker"

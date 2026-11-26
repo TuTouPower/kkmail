@@ -88,6 +88,7 @@ def _seed(Session):
                 id=job_id,
                 job_type="sync_folder_delta", payload={}, status="claimed",
                 run_after=_NOW, created_at=_NOW, updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.commit()

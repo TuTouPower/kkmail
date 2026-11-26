@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.queries import MessageDetail, get_message_detail
 from mail_core.mail.domain.archive import apply_transition
-from mail_core.mail.domain.enums import ArchiveState, JobType
+from mail_core.mail.domain.enums import ArchiveState, ExecutionOrigin, JobType
 from mail_core.mail.storage.models import Message, MessageArchiveState
 from mail_core.sync.jobs import enqueue_job
 
@@ -106,6 +106,7 @@ def sync_message_body(message_id: UUID) -> SyncBodyResult | None:
         job = enqueue_job(
             session,
             job_type=JobType.ARCHIVE_MIME_BATCH.value,
+            execution_origin=ExecutionOrigin.FOREGROUND,
             account_id=account_id,
             payload={"message_id": str(message_id), "batch_size": 1},
             priority=10,

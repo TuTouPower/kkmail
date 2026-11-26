@@ -33,7 +33,7 @@ from mail_core.blobs.quota import (
 from mail_core.blobs.store import BlobStore
 from mail_core.mail.domain.archive import apply_transition
 from mail_core.security.redact import safe_error
-from mail_core.mail.domain.enums import ArchiveState, JobType, OutboxEventType
+from mail_core.mail.domain.enums import ArchiveState, ExecutionOrigin, JobType, OutboxEventType
 from mail_core.mail.storage.models import (
     Account,
     Attachment,
@@ -698,6 +698,7 @@ def resume_quota_paused_archives(
                 enqueue_job(
                     s,
                     job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                    execution_origin=ExecutionOrigin.BACKGROUND,
                     account_id=account_id,
                     priority=50,
                     dedupe_key=f"archive_mime_batch:{account_id}",
@@ -709,6 +710,7 @@ def resume_quota_paused_archives(
                     enqueue_job(
                         s,
                         job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                        execution_origin=ExecutionOrigin.BACKGROUND,
                         account_id=aid,
                         priority=50,
                         dedupe_key=f"archive_mime_batch:{aid}",
@@ -1432,6 +1434,7 @@ def run_archive_batch(
                 enqueue_job(
                     session,
                     job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                    execution_origin=ExecutionOrigin.BACKGROUND,
                     account_id=account_id,
                     payload={"batch_size": limit, "recent_days": recent_days,
                              "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},
@@ -1454,6 +1457,7 @@ def run_archive_batch(
                 enqueue_job(
                     session,
                     job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                    execution_origin=ExecutionOrigin.BACKGROUND,
                     account_id=account_id,
                     payload={"batch_size": limit, "recent_days": recent_days,
                              "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},

@@ -60,6 +60,7 @@ def test_capacity_deferral_rounds_do_not_consume_attempts():
                 locked_by=_WORKER, locked_at=_NOW,
                 dedupe_key=f"remote-op-push:{account_id}",
                 run_after=_NOW, created_at=_NOW, updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.add(
@@ -75,7 +76,7 @@ def test_capacity_deferral_rounds_do_not_consume_attempts():
 
     with patch.object(remote_push_mod, "build_provider", lambda *a, **k: _CapacityProvider()):
         for round_no in range(1, 6):
-            result = remote_push_mod.push_remote_operations(account_id, worker_id=_WORKER, store=object())
+            result = remote_push_mod.push_remote_operations(account_id, worker_id=_WORKER, store=object(), execution_origin="foreground")
             assert result["status"] == "capacity_unavailable"
             with Session() as session:
                 op = session.get(RemoteOperation, op_id)

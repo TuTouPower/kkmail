@@ -100,6 +100,7 @@ def test_settle_prelocks_all_targets_of_affected_requests():
                 run_after=_NOW,
                 created_at=_NOW,
                 updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.add(
@@ -111,6 +112,7 @@ def test_settle_prelocks_all_targets_of_affected_requests():
                 run_after=_NOW,
                 created_at=_NOW,
                 updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.commit()

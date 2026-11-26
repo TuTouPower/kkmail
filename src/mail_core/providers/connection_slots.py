@@ -130,10 +130,13 @@ class ProviderControlError(RuntimeError):
         return get_config().capacity_retry_seconds
 
 
+from mail_core.net.bulkhead import EndpointCircuitOpenError
+
 #: Errors that mean "delay and reschedule", never "fail".
 CAPACITY_ERRORS: tuple[type[BaseException], ...] = (
     ProviderCapacityUnavailable,
     ProviderControlError,
+    EndpointCircuitOpenError,
 )
 
 

@@ -1,0 +1,86 @@
+"""Unified outbound network transport, proxy tunnels, Pin-IP SSRF, and bulkhead."""
+
+from mail_core.net.bulkhead import (
+    EndpointBulkhead,
+    EndpointCircuitOpenError,
+    EndpointKey,
+    configure_default_bulkhead,
+    default_bulkhead,
+)
+from mail_core.net.dialer import (
+    DEFAULT_CONNECT_TIMEOUT_S,
+    DEFAULT_IO_TIMEOUT_S,
+    DEFAULT_PER_ATTEMPT_TIMEOUT_S,
+    connect_ips_with_fallback,
+    default_connect_timeout_s,
+    default_per_attempt_timeout_s,
+    dial_stream,
+    wrap_tls_socket,
+)
+from mail_core.net.http_client import urlopen_outbound
+from mail_core.net.imap_client import DialedIMAP4, DialedIMAP4_SSL
+from mail_core.net.policy import (
+    NetworkSecurityError,
+    OutboundSecurityPolicy,
+    allowed_cidrs_from_env,
+    is_loopback_host,
+    is_restricted_ip,
+    is_safe_ip,
+    is_syntactic_private_host,
+    parse_allowed_cidrs,
+    private_hosts_allowed,
+    validate_hostname_syntax,
+)
+from mail_core.net.proxy import (
+    ProxyConfig,
+    ProxyMode,
+    ProxyParseError,
+    ProxyScheme,
+    matches_no_proxy,
+    parse_no_proxy,
+    parse_proxy_url,
+    resolve_outbound_proxy,
+    validate_proxy_mode,
+)
+from mail_core.net.tunnel import ProxyTunnelError, handshake_http_connect, handshake_socks5
+
+__all__ = [
+    "DEFAULT_CONNECT_TIMEOUT_S",
+    "DEFAULT_IO_TIMEOUT_S",
+    "DEFAULT_PER_ATTEMPT_TIMEOUT_S",
+    "DialedIMAP4",
+    "DialedIMAP4_SSL",
+    "EndpointBulkhead",
+    "EndpointCircuitOpenError",
+    "EndpointKey",
+    "NetworkSecurityError",
+    "OutboundSecurityPolicy",
+    "ProxyConfig",
+    "ProxyMode",
+    "ProxyParseError",
+    "ProxyScheme",
+    "ProxyTunnelError",
+    "allowed_cidrs_from_env",
+    "configure_default_bulkhead",
+    "connect_ips_with_fallback",
+    "default_bulkhead",
+    "default_connect_timeout_s",
+    "default_per_attempt_timeout_s",
+    "dial_stream",
+    "handshake_http_connect",
+    "handshake_socks5",
+    "is_loopback_host",
+    "is_restricted_ip",
+    "is_safe_ip",
+    "is_syntactic_private_host",
+    "matches_no_proxy",
+    "parse_allowed_cidrs",
+    "parse_no_proxy",
+    "parse_proxy_url",
+    "private_hosts_allowed",
+    "resolve_outbound_proxy",
+    "urlopen_outbound",
+    "validate_hostname_syntax",
+    "validate_proxy_mode",
+    "wrap_tls_socket",
+]

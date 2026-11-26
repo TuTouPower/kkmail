@@ -909,6 +909,7 @@ def test_ac002_catchup_merges_with_pending_delta():
             priority=75,
             run_after=datetime.now(timezone.utc) + timedelta(hours=1),
             dedupe_key=f"delta:{acc_id}:{folder_id}",
+            execution_origin="foreground",
         )
         session.commit()
 
@@ -951,6 +952,7 @@ def test_ac002_catchup_merges_with_claimed_delta():
             payload={"folder_id": str(folder_id)},
             priority=60,
             dedupe_key=f"delta:{acc_id}:{folder_id}",
+            execution_origin="foreground",
         )
         session.commit()
         claimed = claim_jobs(session, worker_id="claimed-worker", limit=1)
@@ -1253,11 +1255,11 @@ def test_ac003_catchup_delta_persists_mail_arrived_without_idle_session():
             account_id = acc.id
 
         store = object()
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
         assert folder_id is not None
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"]
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"]
 
         arrival = datetime.now(timezone.utc) - timedelta(seconds=1)
         provider.append_message(
@@ -1280,7 +1282,7 @@ def test_ac003_catchup_delta_persists_mail_arrived_without_idle_session():
             lambda: len(_delta_jobs_snapshot(Session, account_id, folder_id)) == 1
         ), "catch-up delta was not enqueued after the idle account connected"
 
-        result = sync_folder_delta(account_id, folder_id, worker_id="w", store=store, max_pages=5)
+        result = sync_folder_delta(account_id, folder_id, worker_id="w", store=store, max_pages=5, execution_origin="foreground")
         assert result["status"] == "ok"
         with Session() as session:
             late = session.scalar(

@@ -79,6 +79,9 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**模板契约测试**|工具链合法性冒烟|`pytest .repo_template/tests -q -m contract`|
 |**敏感文档防泄漏门禁**|个人邮箱/宿主路径/凭据泄漏扫描|`python3 scripts/check_doc_sensitive.py docs --check`|
 |**后端单元/集成测试**|FastAPI + PG + Worker|`scripts/run-mail-core-tests.sh run`|
+|**出站代理、Pin-IP 与端点熔断**|CONNECT/SOCKS5 代理 TLS+SNI、双栈超时保留、全局槽位隔离|`KKMAIL_TEST_MODE=unit PYTHONPATH=src .venv/bin/pytest --no-cov tests/mail_core/test_net_outbound.py tests/mail_core/test_net_resilience.py`|
+|**WorkerJob 执行血缘与 0006 迁移**|强类型 `execution_origin` 契约、后台巡检/IDLE/续跑继承与 `20261125_0006` 迁移回填|`scripts/run-mail-core-tests.sh run -k "test_t090 or test_sync_background_lineage or test_sync_backend_handler_isolation or test_migration_validation"`|
+|**结构化故障与诊断白名单投影**|`StructuredFailure` 全链路阶段/errno 留存与严格自由文本 `redact()` 隔离|`scripts/run-mail-core-tests.sh run -k "test_t091 or test_logging_trace_and_redact or test_safe_error_converge_a325 or test_redact_and_poll"`|
 |**UI 稳定编号与引用**|快捷键、气泡浮标、复制格式与唯一性|`(cd src/frontend && npm test -t uiReference)`|
 |**原生下拉控件门禁**|禁止 `<select>` / `<datalist>`，原语 token 化|`npm --prefix src/frontend run css:check`；组件测试 `Select.test.tsx`；双主题 E2E `dropdown_theming.spec.ts`|
 |**Gmail 标签回填**|历史 Important 成员一次性回填、幂等与 checkpoint 不变|`scripts/run-mail-core-tests.sh run -k test_gmail_label_backfill`；运维入口 `python -m mail_core --backfill-gmail-labels`|
@@ -209,8 +212,8 @@ scripts/run-mail-core-tests.sh run -k "test_migration_validation or test_migrate
 
 验证覆盖：
 
-- **统一基线与单 Head 校验 (A17)**：迁移链为单一线性链（统一基线 `20261107_0001` + 增量 revision `20261112_0002`），严格确保迁移链单 head 无分叉、无孤立 revision；
-- **空库建表与基线验证**：从全新空库执行 `upgrade head` 依次重放统一基线 `20261107_0001` 与增量 `20261112_0002`，断言核心业务表、枚举与单例种子数据完整初始化；离线基线工具（`migrate_to_unified_baseline.py`）**仅支持 PostgreSQL**（非 PG 后端一律拒绝，不静默跳过只读/加锁保护；其脚本测试 `test_migrate_to_unified_baseline.py` 已全量迁真实 PostgreSQL，按用例用独立 `CREATE SCHEMA`/`DROP SCHEMA ... CASCADE` 隔离，不改 public schema），与启动入口共用 `plan_migration` 的单一分类；空库由启动 `upgrade head` 建表、离线工具只提示走启动/Alembic 且不盖印，无 `alembic_version` 且存在业务表的库两个入口一律拒绝（32 表齐全也不例外）；启动入口与离线工具统一走 `upgrade_head_and_verify`：落后于 head 的库（含窄转换后的 legacy 库）先 `command.upgrade(head)` 重放增量 revision，再以 ORM metadata 为唯一真相用 Alembic `compare_metadata` 对全部 32 张表做完整比对（列名、PostgreSQL 精确类型、可空性、主键/外键/唯一约束、索引），任何差异即拒绝；`verify_baseline_schema` 只在升级到 head 后执行，绝不拿 head 的 ORM 去比对更早 revision 的 catalog，也不对任何列差异做豁免；已知 legacy 在转换前另走 `verify_narrow_legacy_schema`，仅查转换前置条件（其余基线表存在性、`sync_checkpoints` 的主键/外键与 JSON cursor 及数据可读性、`folder_patrol_status` 既存时的列定义）；
+- **统一基线与单 Head 校验 (A17)**：迁移链为单一线性链（统一基线 `20261107_0001` 经 `20261112_0002`、`20261122_0003`、`20261123_0004`、`20261124_0005` 线性演进至 `CURRENT_HEAD_REVISION = 20261125_0006`），严格确保迁移链单 head 无分叉、无孤立 revision；
+- **空库建表与基线验证**：从全新空库执行 `upgrade head` 依次重放统一基线 `20261107_0001` 与全部线性增量 revision（含 `20261125_0006` 回填 `worker_jobs.execution_origin`），断言核心业务表、枚举、检查约束与单例种子数据完整初始化；离线基线工具（`migrate_to_unified_baseline.py`）**仅支持 PostgreSQL**（非 PG 后端一律拒绝，不静默跳过只读/加锁保护；其脚本测试 `test_migrate_to_unified_baseline.py` 已全量迁真实 PostgreSQL，按用例用独立 `CREATE SCHEMA`/`DROP SCHEMA ... CASCADE` 隔离，不改 public schema），与启动入口共用 `plan_migration` 的单一分类；空库由启动 `upgrade head` 建表、离线工具只提示走启动/Alembic 且不盖印，无 `alembic_version` 且存在业务表的库两个入口一律拒绝（32 表齐全也不例外）；启动入口与离线工具统一走 `upgrade_head_and_verify`：落后于 head 的库（含窄转换后的 legacy 库）先 `command.upgrade(head)` 重放增量 revision，再以 ORM metadata 为唯一真相用 Alembic `compare_metadata` 对全部 32 张表做完整比对（列名、PostgreSQL 精确类型、可空性、主键/外键/唯一约束、检查约束、索引），任何差异即拒绝；`verify_baseline_schema` 只在升级到 head 后执行，绝不拿 head 的 ORM 去比对更早 revision 的 catalog，也不对任何列差异做豁免；已知 legacy 在转换前另走 `verify_narrow_legacy_schema`，仅查转换前置条件（其余基线表存在性、`sync_checkpoints` 的主键/外键与 JSON cursor 及数据可读性、`folder_patrol_status` 既存时的列定义）；
 - **可逆降级再升级循环**：对统一基线执行 `downgrade base` 彻底清理数据库对象，再执行 `upgrade head` 完整恢复，验证 DDL 双向对称可逆；
 - **真实完整性约束生效**：断言数据库底层唯一约束、外键级联与 RESTRICT 阻断生效，检验 keyset 索引与 FTS trigram 搜索能力；
 - **ORM Schema Drift 校验**：使用 Alembic autogenerate 比较 SQLAlchemy 模型与真实 PostgreSQL catalog 差异，结合显式 catalog 校验确保 0 未登记 drift。

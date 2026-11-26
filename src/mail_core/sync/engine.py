@@ -14,8 +14,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
-from mail_core.sync.context import sync_context_payload
-from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
+from mail_core.sync.context import sync_request_payload
+from mail_core.mail.domain.enums import (
+    ExecutionOrigin,
+    JobStatus,
+    JobType,
+    OutboxEventType,
+    SyncPhase,
+    SyncRunStatus,
+    SyncStatus,
+    normalize_execution_origin,
+)
 from mail_core.mail.domain.folder_views import CONTAINER, VIEW, is_gmail_account, is_gmail_view, is_view_folder
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
@@ -25,7 +34,7 @@ from mail_core.providers.connection_slots import (
 )
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
-from mail_core.security.redact import safe_provider_summary
+from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.sync.checkpoints import ScanGenerationMismatch, begin_scan_generation, invalidate_checkpoint_for_rebuild
 from mail_core.sync.execution import (
     OPEN_LINK_STATES,
@@ -59,8 +68,8 @@ def _scan_context_payload(
 ) -> dict:
     """Full-scan lifecycle context carried in phase-job payloads (R08)."""
     if not full:
-        return sync_context_payload(request_id)
-    return sync_context_payload(
+        return sync_request_payload(request_id)
+    return sync_request_payload(
         request_id,
         full=True,
         scan_generation=str(scan_generation) if scan_generation is not None else None,
@@ -168,10 +177,10 @@ def sync_account_folders(
     account_id: uuid.UUID,
     *,
     worker_id: str,
+    execution_origin: ExecutionOrigin | str,
     store: CredentialStore | None = None,
     lease_ttl: timedelta = timedelta(seconds=120),
     full: bool = False,
-    background: bool = False,
     scan_generation: uuid.UUID | None = None,
     request_id: uuid.UUID | None = None,
     traffic_class: TrafficClass = TrafficClass.FOREGROUND,
@@ -181,6 +190,8 @@ def sync_account_folders(
     ``lease_ttl`` defaults to 120s to cover folder-list RTT; callers that hold the
     lease across multi-page metadata/delta loops must also call ``heartbeat_lease``.
     """
+    origin = normalize_execution_origin(execution_origin)
+    background = origin is ExecutionOrigin.BACKGROUND
     Session = _session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -216,6 +227,7 @@ def sync_account_folders(
                 followup = enqueue_job(
                     session,
                     job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload=_scan_context_payload(full, scan_generation, request_id),
                     priority=60,
@@ -238,6 +250,7 @@ def sync_account_folders(
                 enqueue_job(
                     session,
                     job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload=_scan_context_payload(full, scan_generation, request_id),
                     priority=60,
@@ -345,8 +358,9 @@ def sync_account_folders(
                     delta_job = enqueue_job(
                         session,
                         job_type=JobType.SYNC_FOLDER_DELTA.value,
+                        execution_origin=origin,
                         account_id=account_id,
-                        payload=sync_context_payload(request_id, folder_id=str(existing.id)),
+                        payload=sync_request_payload(request_id, folder_id=str(existing.id)),
                         # t074: within one account the inbox delta sorts
                         # strictly ahead of sibling folders (55 < 60).
                         # Priority numbers are the only guarantee — all
@@ -368,6 +382,7 @@ def sync_account_folders(
                     metadata_job = enqueue_job(
                         session,
                         job_type=JobType.SYNC_FOLDER_METADATA.value,
+                        execution_origin=origin,
                         account_id=account_id,
                         payload={
                             "folder_id": str(existing.id),
@@ -421,6 +436,7 @@ def sync_folder_metadata(
     folder_id: uuid.UUID,
     *,
     worker_id: str,
+    execution_origin: ExecutionOrigin | str,
     store: CredentialStore | None = None,
     lease_ttl: timedelta = timedelta(seconds=120),
     max_pages: int = 10,
@@ -442,6 +458,7 @@ def sync_folder_metadata(
     rebuild below keeps its explicit 40 regardless. Direct callers that
     omit it keep the historical 50.
     """
+    origin = normalize_execution_origin(execution_origin)
     Session = _session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -461,6 +478,7 @@ def sync_folder_metadata(
             followup = enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
                 priority=priority,
@@ -578,11 +596,12 @@ def sync_folder_metadata(
                 followup = enqueue_job(
                     session,
                     job_type=JobType.SYNC_FOLDER_METADATA.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload={
                         "folder_id": str(folder_id),
                         "reason": "cursor_invalid",
-                        "detail": safe_provider_summary(exc),
+                        "detail": StructuredFailure.from_exception(exc).format(),
                         **_scan_context_payload(full, scan_generation, request_id),
                     },
                     priority=40,
@@ -607,6 +626,7 @@ def sync_folder_metadata(
             followup = enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
                 priority=priority,
@@ -631,6 +651,7 @@ def sync_folder_metadata(
             enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
                 priority=priority,
@@ -661,6 +682,7 @@ def sync_folder_metadata(
                 reconcile_job = enqueue_job(
                     session,
                     job_type=JobType.RECONCILE_FOLDER.value,
+                    execution_origin=origin,
                     account_id=account_id,
                     payload={
                         "folder_id": str(folder_id),
@@ -682,16 +704,18 @@ def sync_folder_metadata(
                 enqueue_job(
                     session,
                     job_type=JobType.RECONCILE_FOLDER.value,
+                    execution_origin=origin,
                     account_id=account_id,
-                    payload=sync_context_payload(request_id, folder_id=str(folder_id)),
+                    payload=sync_request_payload(request_id, folder_id=str(folder_id)),
                     priority=80,
                     dedupe_key=f"reconcile:{account_id}:{folder_id}",
                 )
             enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=origin,
                 account_id=account_id,
-                payload=sync_context_payload(request_id, folder_id=str(folder_id)),
+                payload=sync_request_payload(request_id, folder_id=str(folder_id)),
                 priority=60,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=2),
                 dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -699,6 +723,7 @@ def sync_folder_metadata(
             enqueue_job(
                 session,
                 job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                execution_origin=ExecutionOrigin.BACKGROUND,
                 account_id=account_id,
                 priority=40,
                 dedupe_key=f"archive_mime_batch:{account_id}",
@@ -714,6 +739,7 @@ def sync_folder_metadata(
             enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
+                execution_origin=origin,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
                 priority=priority,

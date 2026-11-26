@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
-from mail_core.mail.domain.enums import JobType, OutboxEventType
+from mail_core.mail.domain.enums import ExecutionOrigin, JobType, OutboxEventType
 from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, AccountGroup, Folder, Message, MessageLocation, OutboxEvent
@@ -93,6 +93,7 @@ def _wake_push(session: Session, account_id: uuid.UUID) -> None:
     enqueue_job(
         session,
         job_type=JobType.REMOTE_OPERATION_PUSH.value,
+        execution_origin=ExecutionOrigin.FOREGROUND,
         account_id=account_id,
         payload={},
         priority=40,

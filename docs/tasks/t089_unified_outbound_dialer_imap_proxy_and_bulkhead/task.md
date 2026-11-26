@@ -35,12 +35,12 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：配置了出站代理（`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 或显式代理配置，且目标不在 `NO_PROXY`）时，IMAP 同步与 IDLE 建连通过代理隧道完成 TLS 握手并透传正确目标 SNI，不再忽略代理强制直连。
-- [ ] AC-002：直连模式下（含配置允许或禁止私网开关、以及远程图片代理直连路径），DNS 解析为私网/回环/保留 IP 时在 TCP 建连前即被拦截；实际连向的远端套接字地址即被校验的安全 IP（消除解析后重绑定 TOCTOU），且代理模式下连接位于私网/回环的受信任代理端点不再误触发 SSRF 拒绝。
-- [ ] AC-003：面对同时返回阻塞超时 IPv4 与本地无路由（`ENETUNREACH`）IPv6 的目标主机，建连总耗时严格受有界建连预算控制（显著低于原 `N * io_timeout` 串行阻塞），连接完成后才应用长读超时，且抛出的主异常保留远端 `TimeoutError` 而非被 IPv6 `ENETUNREACH` 掩盖。
-- [ ] AC-004：当同一远端端点连续建连超时/不可达进入端点短冷却窗口后，后续并发请求快速失败并立即释放连接预算槽位，不因多个账号同时阻塞握手而耗尽全局连接池致使其他健康账号出现 `ProviderCapacityUnavailable`。
-- [ ] AC-005：通过 `ImapProvider` 与远程图片代理回归测试及真实本地 IMAP 套件：`scripts/run-mail-core-tests.sh run` 相关协议/安全/代理/连接预算用例及 `docs/blueprint/testing.md` 的 `test_cmd` 通过。
-- [ ] AC-006：同步更新 `docs/specs/account_connection.md`、`docs/specs/mail_sync_and_storage.md`（登记 `t089`）及对应 blueprint 文档。
+- [x] AC-001：配置了出站代理（`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 或显式代理配置，且目标不在 `NO_PROXY`）时，IMAP 同步与 IDLE 建连通过代理隧道完成 TLS 握手并透传正确目标 SNI，不再忽略代理强制直连。
+- [x] AC-002：直连模式下（含配置允许或禁止私网开关、以及远程图片代理直连路径），DNS 解析为私网/回环/保留 IP 时在 TCP 建连前即被拦截；实际连向的远端套接字地址即被校验的安全 IP（消除解析后重绑定 TOCTOU），且代理模式下连接位于私网/回环的受信任代理端点不再误触发 SSRF 拒绝。
+- [x] AC-003：面对同时返回阻塞超时 IPv4 与本地无路由（`ENETUNREACH`）IPv6 的目标主机，建连总耗时严格受有界建连预算控制（显著低于原 `N * io_timeout` 串行阻塞），连接完成后才应用长读超时，且抛出的主异常保留远端 `TimeoutError` 而非被 IPv6 `ENETUNREACH` 掩盖。
+- [x] AC-004：当同一远端端点连续建连超时/不可达进入端点短冷却窗口后，后续并发请求快速失败并立即释放连接预算槽位，不因多个账号同时阻塞握手而耗尽全局连接池致使其他健康账号出现 `ProviderCapacityUnavailable`。
+- [x] AC-005：通过 `ImapProvider` 与远程图片代理回归测试及真实本地 IMAP 套件：`scripts/run-mail-core-tests.sh run` 相关协议/安全/代理/连接预算用例及 `docs/blueprint/testing.md` 的 `test_cmd` 通过。
+- [x] AC-006：同步更新 `docs/specs/account_connection.md`、`docs/specs/mail_sync_and_storage.md`（登记 `t089`）及对应 blueprint 文档。
 
 ### 可测试性声明
 

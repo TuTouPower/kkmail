@@ -207,6 +207,7 @@ def test_ac004_ac005_job_notify_immediate_vs_future_and_dedupe():
             job_type=JobType.GC_BLOBS.value,
             status=JobStatus.PENDING.value,
             run_after=now_utc - timedelta(seconds=1),
+            execution_origin="background",
         )
         session.add(job)
         session.commit()
@@ -224,6 +225,7 @@ def test_ac004_ac005_job_notify_immediate_vs_future_and_dedupe():
             job_type=JobType.GC_BLOBS.value,
             run_after=now_utc + timedelta(hours=2),
             dedupe_key=dedupe_k,
+            execution_origin="background",
         )
         session.commit()
 
@@ -239,6 +241,7 @@ def test_ac004_ac005_job_notify_immediate_vs_future_and_dedupe():
             job_type=JobType.GC_BLOBS.value,
             run_after=now_utc - timedelta(seconds=5),
             dedupe_key=dedupe_k,
+            execution_origin="background",
         )
         session.commit()
 
@@ -293,6 +296,7 @@ def test_ac004_worker_claims_enqueued_job_within_1_second():
                 job_type=JobType.GC_BLOBS.value,
                 payload={},
                 priority=10,
+                execution_origin="background",
             )
             session.commit()
             test_jid = job.id
@@ -380,6 +384,7 @@ def test_pg_outbox_and_worker_job_commit_rollback_notify_and_concurrency():
                     status=JobStatus.PENDING.value,
                     run_after=now_utc - timedelta(seconds=1),
                     dedupe_key=f"rb-job-{tag}",
+                    execution_origin="background",
                 )
             )
             session.flush()
@@ -404,6 +409,7 @@ def test_pg_outbox_and_worker_job_commit_rollback_notify_and_concurrency():
                 status=JobStatus.PENDING.value,
                 run_after=now_utc - timedelta(seconds=1),
                 dedupe_key=f"commit-job-{tag}",
+                execution_origin="background",
             )
             session.add(job)
             session.commit()

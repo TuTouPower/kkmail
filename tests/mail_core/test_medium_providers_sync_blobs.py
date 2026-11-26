@@ -78,7 +78,7 @@ def test_imap_timeout_passed_to_connect(monkeypatch):
     seen = {}
 
     class FakeIMAP:
-        def __init__(self, host, port, timeout=None, ssl_context=None):
+        def __init__(self, host, port, timeout=None, ssl_context=None, **_kwargs):
             seen["timeout"] = timeout
             seen["host"] = host
             seen["ssl_context"] = ssl_context
@@ -93,7 +93,7 @@ def test_imap_timeout_passed_to_connect(monkeypatch):
         def list(self):
             return ("NO", [b"fail"])
 
-    monkeypatch.setattr("mail_core.providers.imap.imaplib.IMAP4_SSL", FakeIMAP)
+    monkeypatch.setattr("mail_core.providers.imap.DialedIMAP4_SSL", FakeIMAP)
     p = ImapProvider(host="h", port=993, username="u", password="p", timeout=12.5)
     with pytest.raises(RuntimeError, match="LIST failed"):
         p.list_folders()
@@ -125,7 +125,7 @@ def test_imap_fetch_failure_raises_not_advance(monkeypatch):
                 return ("NO", [None])
             return ("NO", [])
 
-    monkeypatch.setattr("mail_core.providers.imap.imaplib.IMAP4_SSL", FakeIMAP)
+    monkeypatch.setattr("mail_core.providers.imap.DialedIMAP4_SSL", FakeIMAP)
     p = ImapProvider(host="h", port=993, username="u", password="p")
     with pytest.raises(RuntimeError, match="UID FETCH"):
         p.fetch_metadata_page("INBOX", {"uid_next": 10, "uidvalidity": 7, "page_size": 50})
@@ -153,7 +153,7 @@ def test_imap_search_failure_raises_not_exhausted(monkeypatch):
                 return ("NO", [b""])
             return ("NO", [])
 
-    monkeypatch.setattr("mail_core.providers.imap.imaplib.IMAP4_SSL", FakeIMAP)
+    monkeypatch.setattr("mail_core.providers.imap.DialedIMAP4_SSL", FakeIMAP)
     p = ImapProvider(host="h", port=993, username="u", password="p")
     with pytest.raises(RuntimeError, match="UID SEARCH"):
         p.fetch_metadata_page("INBOX", {"uid_next": 1, "uidvalidity": 7})
@@ -282,6 +282,7 @@ def test_complete_job_requires_owner():
         priority=100,
         account_id=None,
         job_type="sync_folder_delta",
+        execution_origin="foreground",
     )
     fake = _FakeSession()
     fake.scalar_result = job
@@ -528,7 +529,7 @@ def test_enqueue_account_sync_raises_when_disabled():
     mock_session.get.return_value = acc
 
     with pytest.raises(ValueError, match="account sync is disabled"):
-        enqueue_account_sync(mock_session, uuid.uuid4())
+        enqueue_account_sync(mock_session, uuid.uuid4(), execution_origin="foreground")
 
 
 def test_handle_job_skips_when_sync_disabled():
@@ -546,6 +547,7 @@ def test_handle_job_skips_when_sync_disabled():
         job_type=JobType.SYNC_FOLDER_DELTA.value,
         account_id=uuid.uuid4(),
         payload={"folder_id": str(uuid.uuid4())},
+        execution_origin="foreground",
     )
 
     with patch("mail_core.worker.handlers.complete_job") as mock_complete:

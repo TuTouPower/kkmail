@@ -110,6 +110,7 @@ def test_full_request_reuses_root_generation_while_metadata_in_flight():
                 run_after=_NOW,
                 created_at=_NOW,
                 updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.commit()

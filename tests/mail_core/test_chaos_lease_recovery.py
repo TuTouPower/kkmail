@@ -72,7 +72,7 @@ def test_stale_claimed_job_reclaimed_after_worker_death():
     Session = get_session_factory()
     with Session() as session:
         acc = _account(session)
-        enqueue_job(session, job_type="sync_folder_metadata", account_id=acc.id, payload={"folder_id": "x"})
+        enqueue_job(session, job_type="sync_folder_metadata", account_id=acc.id, payload={"folder_id": "x"}, execution_origin="foreground")
         session.commit()
         account_id = acc.id
 

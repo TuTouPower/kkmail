@@ -96,7 +96,8 @@ def test_engine_scan_generation_mismatch_releases_lease(monkeypatch):
     monkeypatch.setattr(engine, "apply_metadata_page", _apply)
 
     result = engine.sync_folder_metadata(
-        harness.account_id, harness.folder_id, worker_id="w-a85", store=object()
+        harness.account_id, harness.folder_id, worker_id="w-a85", store=object(),
+        execution_origin="foreground",
     )
     assert result["status"] == "scan_generation_mismatch"
     assert harness.released == 1
@@ -133,6 +134,7 @@ def test_delta_apply_unexpected_error_releases_lease_and_reraises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="db exploded"):
         delta_mod.sync_folder_delta(
-            harness.account_id, harness.folder_id, worker_id="w-a85", store=object()
+            harness.account_id, harness.folder_id, worker_id="w-a85", store=object(),
+            execution_origin="foreground",
         )
     assert harness.released == 1

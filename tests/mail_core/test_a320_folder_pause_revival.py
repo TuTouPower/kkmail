@@ -82,7 +82,8 @@ def _run(monkeypatch, harness):
 
     monkeypatch.setattr(engine, "enqueue_job", _enqueue)
     return engine.sync_account_folders(
-        harness.account.id, worker_id="w-a320", store=object()
+        harness.account.id, worker_id="w-a320", store=object(),
+        execution_origin="foreground",
     )
 
 

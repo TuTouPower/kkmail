@@ -178,7 +178,7 @@ def test_real_imap_full_worker_sync_multipart_chinese_and_idempotence(monkeypatc
                 credential_ref=ref,
                 config={"imap_host": HOST, "imap_port": PORT, "imap_user": USER, "use_ssl": False},
             )
-            enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=acc.id)
+            enqueue_job(session, job_type=JobType.SYNC_ACCOUNT_FOLDERS.value, account_id=acc.id, execution_origin="foreground")
             session.commit()
             account_id = acc.id
 
@@ -232,7 +232,7 @@ def test_real_imap_full_worker_sync_multipart_chinese_and_idempotence(monkeypatc
             folder = session.scalar(select(Folder).where(Folder.account_id == account_id, Folder.role == "inbox"))
             folder_id = folder.id
 
-        meta_result = sync_folder_metadata(account_id, folder_id, worker_id="w-ac002", store=store)
+        meta_result = sync_folder_metadata(account_id, folder_id, worker_id="w-ac002", store=store, execution_origin="foreground")
         assert meta_result["status"] == "ok"
 
         with Session() as session:
@@ -282,12 +282,12 @@ def test_real_imap_incremental_sync_and_remote_writeback(monkeypatch):
             account_id = acc.id
 
         # Initial folder & metadata sync
-        sync_account_folders(account_id, worker_id="w-ac003", store=store)
+        sync_account_folders(account_id, worker_id="w-ac003", store=store, execution_origin="foreground")
         with Session() as session:
             folder = session.scalar(select(Folder).where(Folder.account_id == account_id, Folder.role == "inbox"))
             folder_id = folder.id
 
-        sync_folder_metadata(account_id, folder_id, worker_id="w-ac003", store=store)
+        sync_folder_metadata(account_id, folder_id, worker_id="w-ac003", store=store, execution_origin="foreground")
 
         with Session() as session:
             msg = session.scalar(
@@ -304,7 +304,7 @@ def test_real_imap_incremental_sync_and_remote_writeback(monkeypatch):
             session.commit()
 
         # Push the writeback operation to Dovecot
-        push_res = push_remote_operations(account_id, worker_id="w-wb", store=store)
+        push_res = push_remote_operations(account_id, worker_id="w-wb", store=store, execution_origin="foreground")
         assert push_res["pushed"] >= 1
 
         # Observable remotely on Dovecot: fetch flags directly

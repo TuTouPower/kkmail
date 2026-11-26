@@ -194,7 +194,7 @@ def test_discovery_delta_inbox_priority_strictly_smaller_and_claimed_first(monke
     monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: provider)
     monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: provider)
 
-    assert sync_account_folders(account_id, worker_id="w", store=object())["status"] == "ok"
+    assert sync_account_folders(account_id, worker_id="w", store=object(), execution_origin="foreground")["status"] == "ok"
 
     by_folder = _jobs_by_folder(account_id, JobType.SYNC_FOLDER_DELTA.value)
     assert set(by_folder) == set(folders.values())
@@ -233,7 +233,7 @@ def test_discovery_metadata_inbox_priority_strictly_smaller_and_claimed_first(mo
     account_id, folders = _seed_account(baselines=False)
     provider = _provider()
     monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: provider)
-    assert sync_account_folders(account_id, worker_id="w", store=object())["status"] == "ok"
+    assert sync_account_folders(account_id, worker_id="w", store=object(), execution_origin="foreground")["status"] == "ok"
 
     by_folder = _jobs_by_folder(account_id, JobType.SYNC_FOLDER_METADATA.value)
     assert set(by_folder) == set(folders.values())
@@ -270,12 +270,14 @@ def test_metadata_pagination_continuation_keeps_inbox_priority():
         )
     with patch.object(engine_mod, "build_provider", lambda *_a, **_k: provider):
         result = sync_folder_metadata(
-            account_id, folders["INBOX"], worker_id="w", store=object(), max_pages=1, priority=45
+            account_id, folders["INBOX"], worker_id="w", store=object(), max_pages=1, priority=45,
+            execution_origin="foreground",
         )
         assert result["status"] == "ok"
         assert result["exhausted"] is False
         result_default = sync_folder_metadata(
-            account_id, folders["Archive"], worker_id="w", store=object(), max_pages=1
+            account_id, folders["Archive"], worker_id="w", store=object(), max_pages=1,
+            execution_origin="foreground",
         )
         assert result_default["exhausted"] is False
 
@@ -293,7 +295,8 @@ def test_delta_lease_busy_requeue_keeps_priority(priority):
     account_id, folders = _seed_account(baselines=True)
     _hold_lease(account_id)
     result = sync_folder_delta(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=priority
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=priority,
+        execution_origin="foreground",
     )
     assert result["status"] == "lease_busy"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_DELTA.value, folders["INBOX"]).priority == priority
@@ -302,7 +305,7 @@ def test_delta_lease_busy_requeue_keeps_priority(priority):
 def test_delta_lease_busy_requeue_default_priority():
     account_id, folders = _seed_account(baselines=True)
     _hold_lease(account_id)
-    result = sync_folder_delta(account_id, folders["INBOX"], worker_id="w", store=object())
+    result = sync_folder_delta(account_id, folders["INBOX"], worker_id="w", store=object(), execution_origin="foreground")
     assert result["status"] == "lease_busy"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_DELTA.value, folders["INBOX"]).priority == 60
 
@@ -316,7 +319,8 @@ def test_delta_rate_limited_requeue_keeps_priority(monkeypatch):
 
     monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: LimitedProvider())
     result = sync_folder_delta(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55,
+        execution_origin="foreground",
     )
     assert result["status"] == "rate_limited"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_DELTA.value, folders["INBOX"]).priority == 55
@@ -331,7 +335,8 @@ def test_delta_capacity_requeue_keeps_priority(monkeypatch):
 
     monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: SaturatedProvider())
     result = sync_folder_delta(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55,
+        execution_origin="foreground",
     )
     assert result["status"] == "capacity_unavailable"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_DELTA.value, folders["INBOX"]).priority == 55
@@ -351,7 +356,8 @@ def test_delta_provider_error_returns_without_private_requeue(monkeypatch):
 
     monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: BrokenProvider())
     result = sync_folder_delta(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55,
+        execution_origin="foreground",
     )
     assert result["status"] == "provider_error"
     assert "followup_scheduled" not in result
@@ -389,7 +395,8 @@ def test_delta_fencing_reschedule_keeps_priority(monkeypatch):
 
     monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: LeaseStealingProvider())
     result = sync_folder_delta(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55,
+        execution_origin="foreground",
     )
     assert result["status"] == "fencing_mismatch"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_DELTA.value, folders["INBOX"]).priority == 55
@@ -405,7 +412,8 @@ def test_delta_unexhausted_continuation_keeps_priority(monkeypatch):
         )
     monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: provider)
     result = sync_folder_delta(
-        account_id, folders["INBOX"], worker_id="w", store=object(), max_pages=1, priority=55
+        account_id, folders["INBOX"], worker_id="w", store=object(), max_pages=1, priority=55,
+        execution_origin="foreground",
     )
     assert result["status"] == "ok"
     assert result["exhausted"] is False
@@ -421,7 +429,8 @@ def test_metadata_lease_busy_requeue_keeps_priority():
     account_id, folders = _seed_account(baselines=False)
     _hold_lease(account_id)
     result = sync_folder_metadata(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45,
+        execution_origin="foreground",
     )
     assert result["status"] == "lease_busy"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_METADATA.value, folders["INBOX"]).priority == 45
@@ -430,7 +439,7 @@ def test_metadata_lease_busy_requeue_keeps_priority():
 def test_metadata_lease_busy_requeue_default_priority():
     account_id, folders = _seed_account(baselines=False)
     _hold_lease(account_id)
-    result = sync_folder_metadata(account_id, folders["INBOX"], worker_id="w", store=object())
+    result = sync_folder_metadata(account_id, folders["INBOX"], worker_id="w", store=object(), execution_origin="foreground")
     assert result["status"] == "lease_busy"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_METADATA.value, folders["INBOX"]).priority == 50
 
@@ -444,7 +453,8 @@ def test_metadata_rate_limited_requeue_keeps_priority(monkeypatch):
 
     monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: LimitedProvider())
     result = sync_folder_metadata(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45,
+        execution_origin="foreground",
     )
     assert result["status"] == "rate_limited"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_METADATA.value, folders["INBOX"]).priority == 45
@@ -459,7 +469,8 @@ def test_metadata_capacity_requeue_keeps_priority(monkeypatch):
 
     monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: SaturatedProvider())
     result = sync_folder_metadata(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45,
+        execution_origin="foreground",
     )
     assert result["status"] == "capacity_unavailable"
     assert _pending_job(account_id, JobType.SYNC_FOLDER_METADATA.value, folders["INBOX"]).priority == 45
@@ -474,7 +485,8 @@ def test_metadata_cursor_invalid_rebuild_stays_40(monkeypatch):
 
     monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: InvalidCursorProvider())
     result = sync_folder_metadata(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=45,
+        execution_origin="foreground",
     )
     assert result["status"] == "cursor_invalid"
     rebuild = _pending_job(account_id, JobType.SYNC_FOLDER_METADATA.value, folders["INBOX"])
@@ -500,6 +512,7 @@ def _seed_claimed_job(account_id, folder_id, *, job_type: str, priority: int) ->
             locked_by=WORKER,
             attempts=1,
             dedupe_key=f"{prefix}:{account_id}:{folder_id}",
+            execution_origin="foreground",
         )
         session.add(job)
         session.commit()
@@ -691,20 +704,20 @@ def test_no_inbox_account_keeps_existing_priorities():
     account_id, folders = _seed_account(baselines=True, remote_folders=remote_folders)
     provider = MemoryProvider(folders=list(remote_folders))
     with patch.object(engine_mod, "build_provider", lambda *_a, **_k: provider):
-        assert sync_account_folders(account_id, worker_id="w", store=object())["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=object(), execution_origin="foreground")["status"] == "ok"
 
     by_folder = _jobs_by_folder(account_id, JobType.SYNC_FOLDER_DELTA.value)
     assert {j.priority for j in by_folder.values()} == {60}
 
     account2_id, folders2 = _seed_account(baselines=False, remote_folders=remote_folders)
     with patch.object(engine_mod, "build_provider", lambda *_a, **_k: provider):
-        assert sync_account_folders(account2_id, worker_id="w", store=object())["status"] == "ok"
+        assert sync_account_folders(account2_id, worker_id="w", store=object(), execution_origin="foreground")["status"] == "ok"
     by_folder2 = _jobs_by_folder(account2_id, JobType.SYNC_FOLDER_METADATA.value)
     assert {j.priority for j in by_folder2.values()} == {50}
 
     # Sync still completes normally for an inbox-less account.
     with patch.object(delta_mod, "build_provider", lambda *_a, **_k: provider):
-        result = sync_folder_delta(account_id, folders["Archive"], worker_id="w", store=object())
+        result = sync_folder_delta(account_id, folders["Archive"], worker_id="w", store=object(), execution_origin="foreground")
     assert result["status"] == "ok"
 
 
@@ -715,7 +728,8 @@ def test_requeued_inbox_delta_claimed_before_sibling():
     account_id, folders = _seed_account(baselines=True)
     _hold_lease(account_id)
     result = sync_folder_delta(
-        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55
+        account_id, folders["INBOX"], worker_id="w", store=object(), priority=55,
+        execution_origin="foreground",
     )
     assert result["status"] == "lease_busy"
 
@@ -728,6 +742,7 @@ def test_requeued_inbox_delta_claimed_before_sibling():
             payload={"folder_id": str(folders["Archive"])},
             priority=60,
             dedupe_key=f"delta:{account_id}:{folders['Archive']}",
+            execution_origin="foreground",
         )
         lease = session.get(AccountSyncLease, account_id)
         assert lease is not None

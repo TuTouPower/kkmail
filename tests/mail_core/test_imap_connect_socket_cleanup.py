@@ -34,7 +34,7 @@ def _provider_with_fake_client(monkeypatch, login_exc):
         def login(self, *a):
             raise login_exc
 
-    monkeypatch.setattr("mail_core.providers.imap.imaplib.IMAP4_SSL", FakeIMAP)
+    monkeypatch.setattr("mail_core.providers.imap.DialedIMAP4_SSL", FakeIMAP)
     provider = ImapProvider(host="h", port=993, username="u", password="p")
     return provider, sock
 

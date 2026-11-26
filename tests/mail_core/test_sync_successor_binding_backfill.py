@@ -73,6 +73,7 @@ def test_complete_job_migrates_waiting_link_to_real_successor():
                 locked_at=_NOW,
                 created_at=_NOW,
                 updated_at=_NOW,
+                execution_origin="foreground",
             )
         )
         session.flush()

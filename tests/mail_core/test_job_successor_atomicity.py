@@ -49,6 +49,7 @@ def test_enqueue_during_complete_never_loses_wakeup():
             payload={"folder_id": "f1", "counter": 1},
             priority=50,
             dedupe_key=dedupe_key,
+            execution_origin="foreground",
         )
         s1.commit()
 
@@ -75,6 +76,7 @@ def test_enqueue_during_complete_never_loses_wakeup():
                 payload={"folder_id": "f1", "counter": 2, "new_field": "val2"},
                 priority=20,
                 dedupe_key=dedupe_key,
+                execution_origin="foreground",
             )
             s2.commit()
             enqueue_done.set()
@@ -130,6 +132,7 @@ def test_enqueue_never_returns_terminal_done_job():
             account_id=account_id,
             payload={"folder_id": "f1"},
             dedupe_key=dedupe_key,
+            execution_origin="foreground",
         )
         s.commit()
         job_id = job.id
@@ -147,6 +150,7 @@ def test_enqueue_never_returns_terminal_done_job():
             account_id=account_id,
             payload={"folder_id": "f1", "cycle": 2},
             dedupe_key=dedupe_key,
+            execution_origin="foreground",
         )
         s.commit()
         assert new_job.id != job_id

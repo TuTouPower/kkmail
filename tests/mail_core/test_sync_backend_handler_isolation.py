@@ -21,13 +21,14 @@ from datetime import datetime, timezone
 import pytest
 
 from mail_core.db.session import get_session_factory
+from mail_core.mail.domain.enums import ExecutionOrigin
 from mail_core.sync.context import (
     AccountFailureKind,
     FailureDomain,
     account_failure_kind,
     classify_failure,
     resolve_sync_context,
-    sync_context_payload,
+    sync_request_payload,
 )
 from mail_core.mail.storage.models import SyncRequest, WorkerJob
 from mail_core.providers.http import PermanentAuthError
@@ -40,7 +41,13 @@ pytestmark = pytest.mark.skipif(
 _NOW = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def test_explicit_background_marker_and_scope_lineage():
+def test_execution_origin_column_and_scope_consistency():
+    """t090: replaces legacy payload['background'] + sync_context_payload tests.
+
+    Execution lineage now lives on the non-null WorkerJob.execution_origin
+    column rather than payload markers, so missing origin fails loudly and
+    payload['background'] is ignored.
+    """
     Session = get_session_factory()
     fg_id, bg_id = uuid.uuid4(), uuid.uuid4()
     with Session() as session:
@@ -67,19 +74,34 @@ def test_explicit_background_marker_and_scope_lineage():
             )
         )
         session.commit()
-        # An explicit top-level marker is a first-class background source
-        # (silent/periodic polling), independent of any request lineage.
-        assert resolve_sync_context(session, WorkerJob(payload={"background": True})) == (True, None)
-        assert resolve_sync_context(session, WorkerJob(payload={"request_id": str(bg_id)})) == (True, bg_id)
-        assert resolve_sync_context(session, WorkerJob(payload={"request_id": str(fg_id)})) == (False, fg_id)
-        assert resolve_sync_context(session, WorkerJob(payload={})) == (False, None)
+        assert resolve_sync_context(
+            session, WorkerJob(execution_origin=ExecutionOrigin.BACKGROUND, payload={})
+        ) == (True, None)
+        assert resolve_sync_context(
+            session, WorkerJob(execution_origin=ExecutionOrigin.BACKGROUND, payload={"request_id": str(bg_id)})
+        ) == (True, bg_id)
+        assert resolve_sync_context(
+            session, WorkerJob(execution_origin=ExecutionOrigin.FOREGROUND, payload={"request_id": str(fg_id)})
+        ) == (False, fg_id)
+        # Fail closed if a foreground-tagged job ever references a background request.
+        assert resolve_sync_context(
+            session, WorkerJob(execution_origin=ExecutionOrigin.FOREGROUND, payload={"request_id": str(bg_id)})
+        ) == (True, bg_id)
+        # Payload markers alone no longer override typed column lineage.
+        assert resolve_sync_context(
+            session, WorkerJob(execution_origin=ExecutionOrigin.FOREGROUND, payload={"background": True})
+        ) == (False, None)
+        with pytest.raises(ValueError, match="execution_origin"):
+            resolve_sync_context(session, WorkerJob(payload={}))
 
 
-def test_sync_context_payload_never_emits_background_marker():
+def test_sync_request_payload_emits_only_request_correlation():
+    """t090: replaces test_sync_context_payload_never_emits_background_marker."""
     rid = uuid.uuid4()
-    payload = sync_context_payload(rid, folder_id="f", full=True)
-    assert payload["request_id"] == str(rid)
+    payload = sync_request_payload(rid, folder_id="f", full=True)
+    assert payload == {"folder_id": "f", "full": True, "request_id": str(rid)}
     assert "background" not in payload
+    assert sync_request_payload(None, folder_id="f") == {"folder_id": "f"}
 
 
 def test_failure_classification_is_structural():

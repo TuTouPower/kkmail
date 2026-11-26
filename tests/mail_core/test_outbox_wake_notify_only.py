@@ -24,7 +24,7 @@ def test_outbox_wake_notifies_without_marking_dispatched():
     with Session() as session:
         row = OutboxEvent(event_type=OutboxEventType.SYNC_PROGRESS.value, payload={"wake": True})
         session.add(row)
-        job = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={})
+        job = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={}, execution_origin="background")
         session.commit()
         eid, jid = int(row.id), job.id
 

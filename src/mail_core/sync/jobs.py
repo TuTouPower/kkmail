@@ -5,14 +5,21 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Sequence
+from typing import Any, Sequence
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import JobStatus, JobType
+from mail_core.mail.domain.enums import (
+    ExecutionOrigin,
+    JobStatus,
+    JobType,
+    normalize_execution_origin,
+)
+from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.mail.storage.models import WorkerJob
+from mail_core.sync.context import coalesce_execution_origin
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
@@ -54,22 +61,68 @@ def backoff_seconds(attempts: int) -> int:
     return min(3600, 2**exp)
 
 
+_LINEAGE_PAYLOAD_KEYS = frozenset({"request_id", "parent_request_id", "full", "scan_generation"})
+
+
+def _merge_coalesced_payload(
+    base_payload: dict[str, Any],
+    incoming_payload: dict[str, Any],
+    *,
+    existing_origin: ExecutionOrigin,
+    incoming_origin: ExecutionOrigin,
+    merged_origin: ExecutionOrigin,
+) -> dict[str, Any]:
+    """Merge non-internal keys on dedupe coalescing without leaking cross-origin request lineage."""
+    merged = {k: v for k, v in base_payload.items() if k != "background"}
+    if existing_origin is ExecutionOrigin.BACKGROUND and incoming_origin is ExecutionOrigin.FOREGROUND:
+        for key in _LINEAGE_PAYLOAD_KEYS:
+            merged.pop(key, None)
+    for k, v in incoming_payload.items():
+        if k.startswith("_") or k == "background":
+            continue
+        if (
+            merged_origin is ExecutionOrigin.FOREGROUND
+            and incoming_origin is ExecutionOrigin.BACKGROUND
+            and k in _LINEAGE_PAYLOAD_KEYS
+        ):
+            continue
+        merged[k] = v
+    return merged
+
+
 def _record_claimed_followup(
     job: WorkerJob,
     *,
     payload: dict,
     priority: int,
     run_after: datetime,
+    execution_origin: ExecutionOrigin | str,
 ) -> None:
     p = dict(job.payload or {})
     next_req = dict(p.get("_queue_next") or {})
-    merged_payload = dict(next_req.get("payload") or {})
-    for k, v in payload.items():
-        if not k.startswith("_"):
-            merged_payload[k] = v
+    base_next_payload = dict(next_req.get("payload") or {})
 
     current_pri = next_req.get("priority", priority)
     merged_priority = min(current_pri, priority)
+    incoming_origin = normalize_execution_origin(execution_origin)
+    existing_next_raw = next_req.get("execution_origin")
+    existing_origin = (
+        normalize_execution_origin(existing_next_raw)
+        if existing_next_raw is not None
+        else incoming_origin
+    )
+    merged_origin = (
+        coalesce_execution_origin(existing_origin, incoming_origin)
+        if existing_next_raw is not None
+        else incoming_origin
+    )
+    merged_payload = _merge_coalesced_payload(
+        base_next_payload,
+        payload,
+        existing_origin=existing_origin,
+        incoming_origin=incoming_origin,
+        merged_origin=merged_origin,
+    )
 
     current_run_after_str = next_req.get("run_after")
     if current_run_after_str:
@@ -85,6 +138,7 @@ def _record_claimed_followup(
         "payload": merged_payload,
         "priority": merged_priority,
         "run_after": merged_ra.isoformat(),
+        "execution_origin": merged_origin.value,
     }
     p["_queue_next"] = queue_next_record
     p["_followup_needed"] = True
@@ -116,14 +170,21 @@ def _merge_into_pending_job(
     payload: dict,
     priority: int,
     run_after: datetime,
+    execution_origin: ExecutionOrigin | str,
 ) -> None:
-    p = dict(job.payload or {})
-    for k, v in payload.items():
-        if not k.startswith("_"):
-            p[k] = v
-    job.payload = p
+    existing_origin = normalize_execution_origin(job.execution_origin)
+    incoming_origin = normalize_execution_origin(execution_origin)
+    merged_origin = coalesce_execution_origin(existing_origin, incoming_origin)
+    job.payload = _merge_coalesced_payload(
+        dict(job.payload or {}),
+        payload,
+        existing_origin=existing_origin,
+        incoming_origin=incoming_origin,
+        merged_origin=merged_origin,
+    )
     job.priority = min(job.priority, priority)
-    floor = _backoff_floor(job, p)
+    job.execution_origin = merged_origin.value
+    floor = _backoff_floor(job, job.payload)
     if floor is not None and run_after < floor:
         # A dedupe merge must not wake a job out of its backoff window:
         # payload/priority merge above still applies, timing does not.
@@ -138,13 +199,15 @@ def enqueue_job(
     session: Session,
     *,
     job_type: str,
+    execution_origin: ExecutionOrigin | str,
     account_id: uuid.UUID | None = None,
     payload: dict | None = None,
     priority: int = 100,
     run_after: datetime | None = None,
     dedupe_key: str | None = None,
 ) -> WorkerJob:
-    """Enqueue a job. If ``dedupe_key`` matches a PENDING/CLAIMED row, atomically merge and wake."""
+    """Enqueue a job with mandatory typed ``execution_origin``."""
+    origin_value = normalize_execution_origin(execution_origin).value
     now_utc = datetime.now(timezone.utc)
     target_run_after = run_after or now_utc
     req_payload = payload or {}
@@ -169,6 +232,7 @@ def enqueue_job(
                         payload=req_payload,
                         priority=priority,
                         run_after=target_run_after,
+                        execution_origin=origin_value,
                     )
                     session.flush()
                     return existing
@@ -178,6 +242,7 @@ def enqueue_job(
                         payload=req_payload,
                         priority=priority,
                         run_after=target_run_after,
+                        execution_origin=origin_value,
                     )
                     session.flush()
                     return existing
@@ -185,6 +250,7 @@ def enqueue_job(
         job = WorkerJob(
             job_type=job_type,
             account_id=account_id,
+            execution_origin=origin_value,
             payload=dict(req_payload),
             priority=priority,
             run_after=target_run_after,
@@ -292,6 +358,65 @@ def claim_jobs(
     return claimed_rows
 
 
+def _resolve_successor_origin(locked_job: WorkerJob, queue_next: Any) -> str:
+    """Resolve execution_origin for a successor job from _queue_next or parent job."""
+    if isinstance(queue_next, dict) and queue_next.get("execution_origin") is not None:
+        return normalize_execution_origin(queue_next["execution_origin"]).value
+    return normalize_execution_origin(locked_job.execution_origin).value
+
+
+def _build_successor_payload(
+    base_payload: dict[str, Any],
+    queue_next: Any,
+    *,
+    existing_origin: ExecutionOrigin,
+    successor_origin: ExecutionOrigin,
+) -> dict[str, Any]:
+    """Build successor payload while stripping settled cross-origin request lineage keys."""
+    clean_base = {
+        k: v
+        for k, v in base_payload.items()
+        if not k.startswith("_")
+        and k != "background"
+        and (existing_origin is successor_origin or k not in _LINEAGE_PAYLOAD_KEYS)
+    }
+    incoming = queue_next.get("payload") or {} if isinstance(queue_next, dict) else {}
+    return _merge_coalesced_payload(
+        clean_base,
+        incoming,
+        existing_origin=existing_origin,
+        incoming_origin=successor_origin,
+        merged_origin=successor_origin,
+    )
+
+
+def _resolve_successor_schedule(
+    locked_job: WorkerJob,
+    queue_next: Any,
+    payload: dict[str, Any],
+    result: dict[str, Any] | None,
+) -> tuple[int, datetime]:
+    """Determine priority and run_after for a successor WorkerJob."""
+    priority = locked_job.priority
+    run_after = datetime.now(timezone.utc)
+    if queue_next and isinstance(queue_next, dict):
+        if "priority" in queue_next:
+            priority = queue_next["priority"]
+        if "run_after" in queue_next:
+            try:
+                run_after = datetime.fromisoformat(queue_next["run_after"])
+            except (ValueError, TypeError):
+                pass
+    elif payload.get("_followup_run_after"):
+        try:
+            run_after = datetime.fromisoformat(payload["_followup_run_after"])
+        except (ValueError, TypeError):
+            pass
+    if result and result.get("next_run_after"):
+        run_after = result["next_run_after"]
+    return priority, run_after
+
+
 def complete_job(
     session: Session,
     job: WorkerJob,
@@ -322,35 +447,18 @@ def complete_job(
     needs_successor = bool(queue_next) or bool(has_followup_flag) or handler_has_more or has_waiting_links(session, locked_job)
 
     successor_job = None
+    locked_origin = normalize_execution_origin(locked_job.execution_origin)
+    successor_origin = _resolve_successor_origin(locked_job, queue_next)
     if needs_successor:
-        successor_payload: dict = {}
-        for k, v in payload.items():
-            if not k.startswith("_"):
-                successor_payload[k] = v
-
-        successor_priority = locked_job.priority
-        successor_run_after = datetime.now(timezone.utc)
-
-        if queue_next and isinstance(queue_next, dict):
-            req_pl = queue_next.get("payload") or {}
-            for k, v in req_pl.items():
-                if not k.startswith("_"):
-                    successor_payload[k] = v
-            if "priority" in queue_next:
-                successor_priority = queue_next["priority"]
-            if "run_after" in queue_next:
-                try:
-                    successor_run_after = datetime.fromisoformat(queue_next["run_after"])
-                except (ValueError, TypeError):
-                    pass
-        elif payload.get("_followup_run_after"):
-            try:
-                successor_run_after = datetime.fromisoformat(payload["_followup_run_after"])
-            except (ValueError, TypeError):
-                pass
-
-        if result and result.get("next_run_after"):
-            successor_run_after = result["next_run_after"]
+        successor_payload = _build_successor_payload(
+            payload,
+            queue_next,
+            existing_origin=locked_origin,
+            successor_origin=ExecutionOrigin(successor_origin),
+        )
+        successor_priority, successor_run_after = _resolve_successor_schedule(
+            locked_job, queue_next, payload, result
+        )
 
     locked_job.status = JobStatus.DONE.value
     locked_job.locked_by = None
@@ -366,6 +474,7 @@ def complete_job(
         successor_job = WorkerJob(
             job_type=locked_job.job_type,
             account_id=locked_job.account_id,
+            execution_origin=successor_origin,
             payload=successor_payload,
             priority=successor_priority,
             run_after=successor_run_after,
@@ -396,7 +505,7 @@ def reschedule_job(
     delay_seconds: float = 5.0,
     now: datetime | None = None,
     count_failure: bool = False,
-    error: BaseException | str | None = None,
+    error: StructuredFailure | BaseException | str | None = None,
 ) -> None:
     """Requeue a job on the same row (framework-owned retry).
 
@@ -454,10 +563,36 @@ def heartbeat_job_claim(
     return heartbeat_at if result.rowcount == 1 else None
 
 
+def _retry_after_delay(error: Any, default_delay: float) -> float:
+    if isinstance(error, StructuredFailure):
+        raw_retry: Any = error.retry_after_s
+    elif isinstance(error, BaseException):
+        raw_retry = StructuredFailure.from_exception(error).retry_after_s
+    else:
+        raw_retry = getattr(error, "retry_after_seconds", None)
+    if raw_retry is None:
+        return default_delay
+    try:
+        retry_after = float(raw_retry)
+        return max(default_delay, retry_after) if retry_after > 0 else default_delay
+    except (ValueError, TypeError):
+        return default_delay
+
+
+def _project_job_error(error: StructuredFailure | BaseException | str | None) -> str | None:
+    from mail_core.security.redact import safe_error
+
+    if isinstance(error, StructuredFailure):
+        return error.format() or None
+    if isinstance(error, BaseException):
+        return StructuredFailure.from_exception(error).format() or None
+    return safe_error(error) or None
+
+
 def fail_job(
     session: Session,
     job: WorkerJob,
-    error: BaseException | str,
+    error: StructuredFailure | BaseException | str | None,
     *,
     worker_id: str | None = None,
     max_attempts: int | None = None,
@@ -467,23 +602,15 @@ def fail_job(
     _assert_job_owner(job, worker_id)
     now = now or datetime.now(timezone.utc)
     cap = max_attempts if max_attempts is not None else _max_attempts()
-    from mail_core.security.redact import safe_error
 
-    job.last_error = safe_error(error) or None
+    job.last_error = _project_job_error(error)
     if hasattr(job, "failure_attempts"):
         failure_attempts = int(job.failure_attempts) + 1
     else:  # Compatibility for minimal job test doubles without the mapped field.
         failure_attempts = int(job.attempts)
     job.failure_attempts = failure_attempts
     if failure_attempts < cap:
-        delay = backoff_seconds(failure_attempts)
-        if hasattr(error, "retry_after_seconds") and getattr(error, "retry_after_seconds", None) is not None:
-            try:
-                retry_after = float(getattr(error, "retry_after_seconds"))
-                if retry_after > 0:
-                    delay = max(delay, retry_after)
-            except (ValueError, TypeError):
-                pass
+        delay = _retry_after_delay(error, backoff_seconds(failure_attempts))
         job.status = JobStatus.PENDING.value
         job.run_after = now + timedelta(seconds=delay)
         job.locked_by = None

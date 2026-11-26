@@ -215,11 +215,11 @@ def reconcile_folder(
         delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
         return {"status": "capacity_unavailable", "retry_after": delay}
     except Exception as exc:
-        from mail_core.security.redact import safe_provider_summary
-        from mail_core.sync.context import classify_failure
+        from mail_core.mail.domain.failures import StructuredFailure
 
-        err_summary = safe_provider_summary(exc)
-        log.error("reconcile provider I/O failed for folder %s: %s", folder_id, err_summary)
+        failure = StructuredFailure.from_exception(exc)
+        err_summary = failure.format()
+        log.error("reconcile provider I/O failed for folder %s: %s", folder_id, failure)
         with Session() as session:
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
@@ -228,7 +228,8 @@ def reconcile_folder(
                 session.rollback()
         result = {
             "status": "provider_error",
-            "failure_code": classify_failure(exc).code,
+            "failure_code": failure.domain.value,
+            "failure": failure.to_dict(),
             "error": err_summary,
         }
         return result

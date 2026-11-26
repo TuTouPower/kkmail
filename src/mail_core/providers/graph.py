@@ -433,11 +433,17 @@ class GraphProvider:
             except Exception as exc:
                 if isinstance(exc, (RateLimitedError, ProviderHttpError, TimeoutError, ConnectionError, OSError)) or is_capacity_error(exc):
                     raise
-                from mail_core.security.redact import safe_error
+                from mail_core.mail.domain.failures import StructuredFailure
 
+                failure = StructuredFailure.from_exception(exc)
+                err_text = failure.format()
                 for op_id, _, _, _ in chunk:
                     if op_id not in results:
-                        results[op_id] = RemoteOperationResult(success=False, error=f"Graph batch error: {safe_error(exc)}")
+                        results[op_id] = RemoteOperationResult(
+                            success=False,
+                            error=err_text,
+                            failure=failure,
+                        )
 
         return [
             (

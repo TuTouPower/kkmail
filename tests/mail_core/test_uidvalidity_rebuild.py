@@ -146,7 +146,7 @@ def test_sync_folder_metadata_rebuilds_on_cursor_invalid():
             session.commit()
             account_id, folder_id = acc.id, folder.id
 
-        result = sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
+        result = sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
         assert result["status"] == "cursor_invalid"
 
         with Session() as session:

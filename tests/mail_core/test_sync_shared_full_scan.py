@@ -178,6 +178,7 @@ def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
             full=bool(payload.get("full")),
             scan_generation=_uuid_or_none(payload.get("scan_generation")),
             request_id=_uuid_or_none(payload.get("request_id")),
+            execution_origin="foreground",
         )
         assert result["status"] == "ok"
         _complete(Session, discovery_id)
@@ -211,6 +212,7 @@ def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
             full=bool(payload.get("full")),
             scan_generation=_uuid_or_none(payload.get("scan_generation")),
             request_id=_uuid_or_none(payload.get("request_id")),
+            execution_origin="foreground",
         )
         assert result["status"] == "ok"
         assert result["exhausted"] is True

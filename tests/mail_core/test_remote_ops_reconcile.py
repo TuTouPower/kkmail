@@ -70,10 +70,10 @@ def test_push_mark_read_and_reconcile_deletes():
             session.commit()
             account_id = acc.id
 
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"] is True
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"] is True
 
         # enqueue mark_read for message 1
         with Session() as session:
@@ -86,7 +86,7 @@ def test_push_mark_read_and_reconcile_deletes():
             )
             session.commit()
 
-        pushed = push_remote_operations(account_id, worker_id="w", store=store)
+        pushed = push_remote_operations(account_id, worker_id="w", store=store, execution_origin="foreground")
         assert pushed["status"] == "ok"
         assert pushed["pushed"] == 1
         assert provider.messages["INBOX"][0].is_read is True
@@ -141,10 +141,10 @@ def test_reconcile_renews_lease_between_bounded_delete_batches(monkeypatch):
             session.commit()
             account_id = acc.id
 
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"] is True
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"] is True
 
         provider.messages["INBOX"] = []
         result = reconcile_folder(account_id, folder_id, worker_id="w", store=store, lease_ttl=timedelta(seconds=30))
@@ -243,7 +243,7 @@ def test_remote_push_never_passes_null_remote_id_to_provider(monkeypatch):
     provider.apply_remote_operation.return_value.success = True
     monkeypatch.setattr(push_mod, "build_provider", lambda account, store=None, *args, **kwargs: provider)
 
-    result = push_remote_operations(account_id, worker_id="null-remote-id", store=DictCredentialStore({"r": "x"}))
+    result = push_remote_operations(account_id, worker_id="null-remote-id", store=DictCredentialStore({"r": "x"}), execution_origin="foreground")
     assert result["status"] == "ok"
     assert result["pushed"] == 0
     assert result["failed"] == 1
@@ -282,10 +282,10 @@ def test_push_flag_move_trash_memory():
             )
             session.commit()
             account_id = acc.id
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"] is True
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"] is True
 
         with Session() as session:
             enqueue_remote_operation(
@@ -308,7 +308,7 @@ def test_push_flag_move_trash_memory():
             )
             session.commit()
 
-        pushed = push_remote_operations(account_id, worker_id="w", store=store, limit=10)
+        pushed = push_remote_operations(account_id, worker_id="w", store=store, limit=10, execution_origin="foreground")
         assert pushed["status"] == "ok"
         assert pushed["pushed"] == 2
         assert "1" in provider.flagged
@@ -359,10 +359,10 @@ def test_a391_reconcile_scan_heartbeat_renews_lease_during_scan(monkeypatch):
             session.commit()
             account_id = acc.id
 
-        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        assert sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")["status"] == "ok"
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"] is True
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")["exhausted"] is True
 
         provider.messages["INBOX"] = []
         result = reconcile_folder(

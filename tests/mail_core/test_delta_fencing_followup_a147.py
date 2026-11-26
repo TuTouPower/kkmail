@@ -113,7 +113,8 @@ def test_apply_stage_fencing_mismatch_reschedules_delta(monkeypatch):
 
     _wire(monkeypatch, harness, apply_delta_page=_apply)
     result = delta_mod.sync_folder_delta(
-        harness.account_id, harness.folder_id, worker_id="w-a147", store=object()
+        harness.account_id, harness.folder_id, worker_id="w-a147", store=object(),
+        execution_origin="foreground",
     )
     assert result["status"] == "fencing_mismatch"
     assert result["followup_scheduled"] is True
@@ -134,7 +135,8 @@ def test_final_fencing_check_mismatch_reschedules_delta(monkeypatch):
 
     monkeypatch.setattr(delta_mod, "assert_fencing", _assert_fencing)
     result = delta_mod.sync_folder_delta(
-        harness.account_id, harness.folder_id, worker_id="w-a147", store=object()
+        harness.account_id, harness.folder_id, worker_id="w-a147", store=object(),
+        execution_origin="foreground",
     )
     assert result["status"] == "fencing_mismatch"
     assert result["followup_scheduled"] is True

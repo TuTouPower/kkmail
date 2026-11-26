@@ -16,12 +16,15 @@ from mail_core.accounts.health import (
     record_connectivity_success,
     set_sync_activity,
 )
+from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.sync.context import (
     AccountFailureKind,
     account_failure_kind,
-    resolve_sync_context as _resolve_sync_context,
+    execution_origin_for_job,
+    resolve_sync_context,
+    structured_failure_from_outcome,
 )
-from mail_core.mail.domain.enums import JobStatus, JobType
+from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType
 from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.security.credentials import get_credential_store
 from mail_core.providers.connection_slots import (
@@ -167,7 +170,7 @@ def _apply_account_health(session: Session, job: WorkerJob, result: Any) -> None
     if job.account_id is None or job.job_type not in _ACCOUNT_SYNC_JOB_TYPES:
         return
     status = result.get("status") if isinstance(result, dict) else None
-    is_background, _ = _resolve_sync_context(session, job)
+    is_background, _ = resolve_sync_context(session, job)
 
     if status == "ok":
         record_connectivity_success(session, job.account_id)
@@ -177,16 +180,11 @@ def _apply_account_health(session: Session, job: WorkerJob, result: Any) -> None
     if kind is AccountFailureKind.AUTH:
         mark_credential_invalid(session, job.account_id)
     elif kind is AccountFailureKind.TRANSPORT:
-        if isinstance(result, dict):
-            detail = result.get("error")
-        else:
-            from mail_core.security.redact import safe_error
-
-            detail = safe_error(result)
+        failure = structured_failure_from_outcome(result)
         record_connectivity_failure(
             session,
             job.account_id,
-            error=str(detail or status or "transport failure"),
+            error=failure,
         )
 
 
@@ -221,12 +219,13 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
     # the Worker framework on the same job row: counted failure + exponential
     # backoff, no forged ``done`` and no privately spawned successor.
     if status == "provider_error" and not result.get("followup_scheduled"):
+        failure = structured_failure_from_outcome(result)
         reschedule_job(
             session,
             job,
             worker_id=worker_id,
             count_failure=True,
-            error=str(result.get("error") or status),
+            error=failure,
         )
         return False
 
@@ -283,7 +282,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
     # in the same worker process do not collide or invalidate each other's lease/claims.
     execution_owner = f"{worker_id}:{job.id}"
 
-    is_background, _ = _resolve_sync_context(session, job)
+    execution_origin, _ = execution_origin_for_job(session, job)
     if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES:
         set_sync_activity(session, account_id, active=True)
     try:
@@ -317,7 +316,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 full=bool(payload.get("full")),
-                background=is_background,
+                execution_origin=execution_origin,
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
             )
@@ -340,6 +339,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 full=bool(payload.get("full")),
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
+                execution_origin=execution_origin,
                 # t074: requeues inside keep this job's priority.
                 priority=job.priority,
             )
@@ -363,7 +363,13 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.remote_push import push_remote_operations
 
             session.commit()
-            result = push_remote_operations(account_id, worker_id=execution_owner, store=get_credential_store(), traffic_class=traffic_class)
+            result = push_remote_operations(
+                account_id,
+                worker_id=execution_owner,
+                store=get_credential_store(),
+                traffic_class=traffic_class,
+                execution_origin=execution_origin,
+            )
             log.info("remote_operation_push %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
@@ -408,6 +414,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 # t074: requeues inside keep this job's priority.
                 priority=job.priority,
                 request_id=_uuid_or_none(payload.get("request_id")),
+                execution_origin=execution_origin,
             )
             log.info("sync_folder_delta %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
@@ -438,8 +445,6 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         fail_job(session, job, f"unknown job_type {job.job_type}", worker_id=worker_id)
         return False
     except Exception as exc:
-        from mail_core.security.redact import safe_error
-
         if is_capacity_error(exc):
             # Budget/control deferral: reschedule without counting a
             # failure and without touching account health.
@@ -452,14 +457,15 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 delay_seconds=_coerce_retry_after(getattr(exc, "retry_after_seconds", None)),
             )
             return False
-        log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
+        failure = StructuredFailure.from_exception(exc)
+        log.error("job %s (%s) failed: %s", job.id, job.job_type, failure)
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
 
         # Classify the failure orthogonally: a transport blip degrades
         # connectivity, a confirmed auth rejection invalidates the credential,
         # and everything else leaves account health untouched.
-        _apply_account_health(session, job, exc)
+        _apply_account_health(session, job, failure)
         # Unified framework retry on the same job row: counted failure and
         # exponential backoff (terminal cap honoured), no forged successor.
         reschedule_job(
@@ -467,6 +473,6 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             job,
             worker_id=worker_id,
             count_failure=True,
-            error=exc,
+            error=failure,
         )
         return False

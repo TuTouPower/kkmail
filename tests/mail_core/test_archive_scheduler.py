@@ -88,10 +88,10 @@ def test_archive_batch_completes_and_respects_hard_quota(tmp_path, monkeypatch):
             acc = create_account(session, email=f"arch-{uuid.uuid4().hex[:8]}@ex.com", provider="memory", credential_ref="r")
             session.commit()
             account_id = acc.id
-        sync_account_folders(account_id, worker_id="w", store=store)
+        sync_account_folders(account_id, worker_id="w", store=store, execution_origin="foreground")
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
-        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
+        sync_folder_metadata(account_id, folder_id, worker_id="w", store=store, execution_origin="foreground")
 
         result = run_archive_batch(
             account_id=account_id,
@@ -190,7 +190,7 @@ def test_archive_batch_reuses_imap_session_across_messages():
         mock_imap_client.select.return_value = ("OK", [b"10"])
         mock_imap_client.uid.return_value = ("OK", [(b"1", b"From: sender@example.com\r\nSubject: Hi\r\n\r\nBody")])
 
-        with patch("imaplib.IMAP4_SSL", return_value=mock_imap_client):
+        with patch("mail_core.providers.imap.DialedIMAP4_SSL", return_value=mock_imap_client):
             imap_provider = ImapProvider(
                 host="imap.example.com",
                 port=993,

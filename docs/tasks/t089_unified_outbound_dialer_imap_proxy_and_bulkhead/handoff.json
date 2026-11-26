@@ -1,0 +1,15 @@
+{
+  "tid": "t089",
+  "attempt": 1,
+  "execution_id": "b6929a0a9e6e457a8ede21f19582ae66",
+  "status": "done",
+  "branch": "t089_unified_outbound_dialer_imap_proxy_and_bulkhead",
+  "base_sha": "4fd1656be379191a3ba9531f8cbd2e94a8803816",
+  "spec_source_sha": "4fd1656be379191a3ba9531f8cbd2e94a8803816",
+  "tests": "`./scripts/run-mail-core-tests.sh run` 2253 passed, 2 skipped（覆盖率 86%，含真实 PostgreSQL 15433 与 Dovecot IMAP 1143）；`pytest .repo_template/tests -q -m contract` 389 passed, 1 skipped；前端 `vitest`（56 文件 597 tests + `openapi:check` + `css:check`）、`tsc -b` 与 `vite build` 通过；桌面端 `npm test` 12 suites 通过；`check_doc_sensitive.py docs --check` 35 文件 0 违规。",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` Playwright 全链路 25 passed。",
+  "review": "Round 1 FAIL（code 7 条、test 5 条）；Round 2 复审 code（`review_code.md`）与 test（`review_test.md`）均 `verdict: PASS`（`reviewed_scope: fac7d89714976f59`，AC-001 ~ AC-006 全部 `TICK-VALID` / `coverage = 6 / 6`）；Round 2 新增 3 条非阻断 minor（`t089_code_f008`、`t089_code_f009`、`t089_test_f006`）已转入 `p096`。",
+  "review_scope": "fac7d89714976f59",
+  "pending": [],
+  "findings": []
+}

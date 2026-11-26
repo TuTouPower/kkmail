@@ -92,7 +92,7 @@ def test_sync_all_accounts_enqueues_delta_mode():
     mock_provider.list_folders.return_value = [remote_inbox]
     mock_provider.list_folder_catalog.return_value = [remote_inbox]
     with patch("mail_core.sync.engine.build_provider", return_value=mock_provider):
-        sync_account_folders(acc_id, worker_id="test-worker", full=False, request_id=req_id)
+        sync_account_folders(acc_id, worker_id="test-worker", full=False, request_id=req_id, execution_origin="foreground")
 
     with Session() as session:
         delta_job = session.scalar(
@@ -135,7 +135,7 @@ def test_sync_single_account_enqueues_delta_mode():
     mock_provider.list_folders.return_value = [remote_inbox]
     mock_provider.list_folder_catalog.return_value = [remote_inbox]
     with patch("mail_core.sync.engine.build_provider", return_value=mock_provider):
-        sync_account_folders(acc_id, worker_id="test-worker", full=False, request_id=req_id)
+        sync_account_folders(acc_id, worker_id="test-worker", full=False, request_id=req_id, execution_origin="foreground")
 
     with Session() as session:
         delta_job = session.scalar(
@@ -188,7 +188,7 @@ def test_new_account_without_checkpoint_enqueues_full_metadata_baseline():
     mock_provider.list_folders.return_value = [rf]
     mock_provider.list_folder_catalog.return_value = [rf]
     with patch("mail_core.sync.engine.build_provider", return_value=mock_provider):
-        sync_account_folders(new_acc_id, worker_id="test-worker", full=False)
+        sync_account_folders(new_acc_id, worker_id="test-worker", full=False, execution_origin="foreground")
 
     with Session() as session:
         # Without checkpoint baseline, must spawn SYNC_FOLDER_METADATA to establish initial baseline

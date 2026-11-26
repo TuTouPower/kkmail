@@ -82,10 +82,28 @@ def test_insert_account_lease_outbox_archive():
         session.add(msg)
         session.flush()
         session.add(MessageArchiveState(message_id=msg.id, state="metadata_synced"))
-        session.add(WorkerJob(job_type="sync_account_folders", account_id=acc.id, payload={}))
+        session.add(
+            WorkerJob(
+                job_type="sync_account_folders",
+                account_id=acc.id,
+                execution_origin="foreground",
+                payload={},
+            )
+        )
         session.commit()
 
         leases = session.scalars(select(AccountSyncLease).where(AccountSyncLease.account_id == acc.id)).all()
         assert len(leases) == 1
         assert leases[0].fencing_token == 1
         assert session.scalar(text("select count(*) from outbox")) >= 1
+
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises((ValueError, IntegrityError)):
+            WorkerJob(job_type="sync_account_folders", account_id=acc.id, execution_origin="invalid", payload={})
+
+        session.rollback()
+        with pytest.raises(IntegrityError):
+            with session.begin_nested():
+                session.add(WorkerJob(job_type="sync_account_folders", account_id=acc.id, payload={}))
+                session.flush()

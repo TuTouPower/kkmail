@@ -6,7 +6,18 @@ written to ``worker_jobs.last_error`` or logs. Callers persist ``safe_error(exc)
 
 from __future__ import annotations
 
+import logging
 import re
+import traceback
+import urllib.error
+from collections.abc import Mapping
+from typing import Any
+
+from mail_core.mail.domain.failures import (
+    StructuredFailure,
+    coerce_structured_failure,
+    failure_phase_of,
+)
 
 MAX_ERROR_CHARS = 500
 
@@ -55,123 +66,199 @@ def redact(text: str | None, *, limit: int | None = MAX_ERROR_CHARS) -> str:
     return out
 
 
-def safe_error(exc: BaseException | str | None) -> str:
-    """Short, redacted description. Provider HTTP bodies are dropped, not stored."""
+def _is_raw_http_body(body: Any, first: str, raw_exc_text: str) -> bool:
+    if not first or first.startswith(("{", "[", "<")) or ('{"' in first) or ("<html" in first.lower()):
+        return True
+    if body is None:
+        return False
+    if isinstance(body, str):
+        stripped = body.strip()
+        if stripped and (stripped == first or stripped in raw_exc_text):
+            return True
+    return raw_exc_text.strip() == str(body).strip()
+
+
+def _format_provider_http_error(exc: BaseException) -> str:
+    phase = failure_phase_of(exc)
+    phase_part = f" phase={phase.value}" if phase is not None else ""
+    status_val = getattr(exc, "status", None)
+    status = f" status={status_val}" if status_val is not None else ""
+    raw_text = str(exc)
+    first = (raw_text.splitlines() or [""])[0].strip()
+    if _is_raw_http_body(getattr(exc, "body", None), first, raw_text):
+        return StructuredFailure.from_exception(exc).format()
+    return redact(f"{type(exc).__name__}{phase_part}{status}: {first[:120]}")
+
+
+def safe_error(exc: StructuredFailure | BaseException | str | None) -> str:
+    """Short, allowlisted or redacted description. Provider HTTP bodies are dropped."""
     if exc is None:
         return ""
+    if isinstance(exc, StructuredFailure):
+        return exc.format()
     if isinstance(exc, str):
         return redact(exc)
     from mail_core.providers.http import ProviderHttpError
 
     if isinstance(exc, ProviderHttpError):
-        status = f" status={exc.status}" if exc.status is not None else ""
-        first = (str(exc).splitlines() or [""])[0].strip()
-        is_raw_body = False
-        if exc.body is not None:
-            if isinstance(exc.body, str) and exc.body.strip() and (exc.body.strip() == first or exc.body.strip() in str(exc)):
-                is_raw_body = True
-            elif str(exc).strip() == str(exc.body).strip():
-                is_raw_body = True
-        if first.startswith(("{", "[", "<")) or ('{"' in first) or ("<html" in first.lower()):
-            is_raw_body = True
-
-        if is_raw_body or not first:
-            return f"{type(exc).__name__}{status}"
-        return redact(f"{type(exc).__name__}{status}: {first[:120]}")
-    # A325: non-provider exceptions converge to type + controlled fields
-    # only. Their raw messages routinely embed SQL text, file paths and
-    # other internal details that must never be persisted (e.g. into
-    # worker_jobs.last_error); the full message remains available to
-    # debug logs through the redacting formatter, not through this value.
-    return safe_provider_summary(exc)
+        return _format_provider_http_error(exc)
+    # A325 + t091: non-provider exceptions converge deterministically via the
+    # StructuredFailure allowlist (phase/status/errno/symbolic code only, never
+    # raw messages or double-redacted regex stripping).
+    return StructuredFailure.from_exception(exc).format()
 
 
-def safe_provider_summary(exc: BaseException | str | None) -> str:
-    """Controlled, safe summary for provider errors and job details.
-
-    Retains only exception type, controlled status/error code, and retry fields.
-    Provider HTTP response bodies, error messages, and raw payloads are dropped.
-    """
+def safe_provider_summary(
+    exc: StructuredFailure | Mapping[str, Any] | BaseException | str | None,
+) -> str:
+    """Controlled allowlist projection for provider errors, health state, and job details."""
     if exc is None:
         return ""
-    if isinstance(exc, str):
-        value = exc.strip()
-        if not value:
-            return "ProviderError"
-        http_status = re.match(
-            r"^HTTP(?:Error)?(?:/\d+(?:\.\d+)?)?\s+(?:ERROR\s+)?(?P<status>\d{3})\b",
-            value,
-            re.IGNORECASE,
-        )
-        if http_status:
-            return f"HTTP {http_status.group('status')}"
-        bare_status = re.match(
-            r"^(?P<status>429|5\d{2})\s+(?:too many requests|server error|internal server error|"
-            r"bad gateway|service unavailable|gateway timeout|temporarily unavailable)\b",
-            value,
-            re.IGNORECASE,
-        )
-        if bare_status:
-            return f"HTTP {bare_status.group('status')}"
-        error_type = re.match(
-            r"^([A-Za-z][A-Za-z0-9_.]{0,79}(?:Error|Exception))(?:\s+status=(\d{3}))?(?=\s|:|$)",
-            value,
-        )
-        if error_type:
-            summary = error_type.group(1)
-            status = error_type.group(2)
-            return f"{summary} status={status}" if status else summary
+    return coerce_structured_failure(exc).format()
 
-        safe_prefixes = (
-            "rate-limited",
-            "rate limited",
-            "rate limit",
-            "too many requests",
-            "request timed out",
-            "request timeout",
-            "operation timed out",
-            "operation timeout",
-            "connection timed out",
-            "connection timeout",
-            "connection reset",
-            "connection refused",
-            "connection closed",
-            "connect timeout",
-            "read timeout",
-            "write timeout",
-            "network error",
-            "socket error",
-            "server error",
-            "internal server error",
-            "service unavailable",
-            "temporarily unavailable",
-            "gateway timeout",
-            "bad gateway",
-            "temporary server failure",
-            "transient provider error",
-            "transient provider failure",
-        )
-        lowered = value.lower()
-        for prefix in safe_prefixes:
-            if lowered.startswith(prefix):
-                return prefix
-        if lowered in {"remote_id_missing", "missing dest_folder_remote_id", "message not found"}:
-            return lowered
-        return "ProviderError"
 
-    parts = [type(exc).__name__]
-    status = getattr(exc, "status", None)
-    if status is None:
-        status = getattr(exc, "status_code", None)
-    if status is not None and isinstance(status, (int, str)):
-        parts.append(f"status={status}")
-    code = getattr(exc, "code", None) or getattr(exc, "error_code", None) or getattr(exc, "errno", None)
-    if code is not None and isinstance(code, (int, str)):
-        parts.append(f"code={code}")
-    retry_after = getattr(exc, "retry_after_seconds", None)
-    if retry_after is not None:
-        parts.append(f"retry_after={retry_after}")
-    return " ".join(parts)
+_SAFE_EXC_ATTR = "_mail_core_safe_exc_text"
+
+
+def _sanitize_log_arg(value: object) -> object:
+    if isinstance(value, StructuredFailure):
+        return value
+    if isinstance(value, (str, BaseException)):
+        return redact(str(value), limit=500)
+    return value
+
+
+def _collect_exception_chain(exc: BaseException) -> list[tuple[BaseException, str | None]]:
+    curr: BaseException | None = exc
+    chain: list[tuple[BaseException, str | None]] = []
+    seen: set[int] = set()
+    while curr is not None and id(curr) not in seen:
+        seen.add(id(curr))
+        relation = None
+        nxt: BaseException | None = None
+        if curr.__cause__ is not None:
+            relation = "The above exception was the direct cause of the following exception:"
+            nxt = curr.__cause__
+        elif curr.__context__ is not None and not curr.__suppress_context__:
+            relation = "During handling of the above exception, another exception occurred:"
+            nxt = curr.__context__
+        chain.append((curr, relation))
+        curr = nxt
+    return chain
+
+
+def _chain_requires_allowlist(chain: list[tuple[BaseException, str | None]]) -> bool:
+    from mail_core.providers.http import ProviderHttpError
+
+    for e, _ in chain:
+        mod_lower = type(e).__module__.lower()
+        if (
+            isinstance(e, (ProviderHttpError, urllib.error.HTTPError))
+            or "provider" in mod_lower
+            or "provider" in type(e).__name__.lower()
+            or "mail_core.net" in mod_lower
+            or "imap4" in type(e).__qualname__.lower()
+            or failure_phase_of(e) is not None
+        ):
+            return True
+    return False
+
+
+def format_safe_exception_chain(ei: tuple[type[BaseException], BaseException, Any]) -> str:
+    """Format an exception traceback safely; provider/network chains use allowlist projection."""
+    typ, exc, tb = ei
+    if exc is None:
+        return ""
+    chain = _collect_exception_chain(exc)
+    if not _chain_requires_allowlist(chain):
+        raw = "".join(traceback.format_exception(typ, exc, tb))
+        return redact(raw, limit=None)
+
+    lines: list[str] = []
+    reversed_chain = list(reversed(chain))
+    for i, (e, rel) in enumerate(reversed_chain):
+        lines.append("Traceback (most recent call last):\n")
+        if e.__traceback__ is not None:
+            tb_text = "".join(traceback.format_tb(e.__traceback__))
+            lines.append(redact(tb_text, limit=None))
+        safe_msg = StructuredFailure.from_exception(e).format()
+        lines.append(f"{type(e).__module__}.{type(e).__qualname__}: {safe_msg}\n")
+        if rel and i < len(reversed_chain) - 1:
+            lines.append(f"\n{rel}\n\n")
+    return "".join(lines)
+
+
+def _redact_record_exceptions(record: logging.LogRecord) -> None:
+    if isinstance(record.exc_text, str) and record.exc_text:
+        if getattr(record, _SAFE_EXC_ATTR, None) != record.exc_text:
+            record.exc_text = redact(record.exc_text, limit=None)
+    elif record.exc_info and record.exc_info[0] is not None:
+        try:
+            record.exc_text = format_safe_exception_chain(record.exc_info)  # type: ignore[arg-type]
+            setattr(record, _SAFE_EXC_ATTR, record.exc_text)
+        except Exception:
+            record.exc_text = f"{record.exc_info[0].__name__}: [REDACTED]"
+    if isinstance(record.stack_info, str) and record.stack_info:
+        record.stack_info = redact(record.stack_info, limit=None)
+
+
+def _protect_structured_args(record: logging.LogRecord) -> tuple[Any, list[tuple[str, str]]]:
+    args = record.args
+    replacements: list[tuple[str, str]] = []
+    if not args:
+        return args, replacements
+    if isinstance(args, Mapping):
+        if not any(isinstance(v, StructuredFailure) for v in args.values()):
+            return args, replacements
+        protected_map: dict[Any, Any] = {}
+        for k, v in args.items():
+            if isinstance(v, StructuredFailure):
+                marker = f"\x1f__KKMAIL_SF_{len(replacements)}__\x1f"
+                replacements.append((marker, v.format()))
+                protected_map[k] = marker
+            else:
+                protected_map[k] = v
+        record.args = protected_map
+        return args, replacements
+    if isinstance(args, tuple) and any(isinstance(item, StructuredFailure) for item in args):
+        protected_items: list[Any] = []
+        for item in args:
+            if isinstance(item, StructuredFailure):
+                marker = f"\x1f__KKMAIL_SF_{len(replacements)}__\x1f"
+                replacements.append((marker, item.format()))
+                protected_items.append(marker)
+            else:
+                protected_items.append(item)
+        record.args = tuple(protected_items)
+    return args, replacements
+
+
+def format_redacted_log_record(formatter: logging.Formatter, record: logging.LogRecord) -> str:
+    """Format and redact a log record while preserving allowlisted StructuredFailure args/chains."""
+    orig_args, replacements = _protect_structured_args(record)
+    try:
+        record.message = record.getMessage()
+    finally:
+        record.args = orig_args
+    if formatter.usesTime():
+        record.asctime = formatter.formatTime(record, formatter.datefmt)
+    out = redact(formatter.formatMessage(record), limit=None)
+    for marker, safe_val in replacements:
+        out = out.replace(marker, safe_val)
+    if record.exc_info and not record.exc_text:
+        record.exc_text = formatter.formatException(record.exc_info)
+        setattr(record, _SAFE_EXC_ATTR, record.exc_text)
+    if record.exc_text:
+        exc_out = (
+            record.exc_text
+            if getattr(record, _SAFE_EXC_ATTR, None) == record.exc_text
+            else redact(record.exc_text, limit=None)
+        )
+        out = f"{out}{exc_out}" if out.endswith("\n") else f"{out}\n{exc_out}"
+    if record.stack_info:
+        stack_out = redact(formatter.formatStack(record.stack_info), limit=None)
+        out = f"{out}{stack_out}" if out.endswith("\n") else f"{out}\n{stack_out}"
+    return out
 
 
 class RedactingFilter:
@@ -185,35 +272,15 @@ class RedactingFilter:
     """
 
     def filter(self, record: object) -> bool:
-        import logging
-        import traceback
-
         if not isinstance(record, logging.LogRecord):
             return True
         if isinstance(record.msg, str):
             record.msg = redact(record.msg, limit=2000)
         if record.args:
             if isinstance(record.args, dict):
-                record.args = {
-                    k: redact(str(v), limit=500) if isinstance(v, (str, BaseException)) else v
-                    for k, v in record.args.items()
-                }
+                record.args = {k: _sanitize_log_arg(v) for k, v in record.args.items()}
             elif isinstance(record.args, tuple):
-                record.args = tuple(
-                    redact(str(arg), limit=500) if isinstance(arg, (str, BaseException)) else arg
-                    for arg in record.args
-                )
-        if isinstance(record.exc_text, str) and record.exc_text:
-            record.exc_text = redact(record.exc_text, limit=None)
-        elif record.exc_info and record.exc_info[0] is not None:
-            try:
-                record.exc_text = redact(
-                    "".join(traceback.format_exception(*record.exc_info)),
-                    limit=None,
-                )
-            except Exception:
-                record.exc_text = f"{record.exc_info[0].__name__}: [REDACTED]"
-        if isinstance(record.stack_info, str) and record.stack_info:
-            record.stack_info = redact(record.stack_info, limit=None)
+                record.args = tuple(_sanitize_log_arg(arg) for arg in record.args)
+        _redact_record_exceptions(record)
         return True
 

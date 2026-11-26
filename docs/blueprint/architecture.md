@@ -34,9 +34,10 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 远端文件夹身份由 `remote_id` 确定，`role` 只用于分类查询；同账号多个文件夹即使共享 role，也必须保持独立可访问并在侧栏显示可区分名称。Graph 已取得 well-known Inbox ID 时以该 ID 为准，不将同名自定义文件夹回退为第二个收件箱。
     - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)；支持多批次自动续跑、瞬时错误与限流退避延迟唤醒、跨同步边界的本地字段意图保护与孤儿任务安全对账恢复。推送采用批量管道（一次最多 500 条）：IMAP 单连接复用登录，按（源文件夹，操作类型，目标值）分组发送 UID 集合 STORE/MOVE 并做 1000 字符区间分块；Graph 使用 JSON batching（单批上限 20 个子请求）；执行期间不设人为时间合并窗口，推送完成后逐条按 revision CAS 独立结算，中途并发变更的操作回到 PENDING 重推。
 
-- **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
+- **统一出站传输与协议适配 (`src/mail_core/net/`, `src/mail_core/sync/`, `src/mail_core/providers/`)**：
 
-    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；默认 Socket 超时放宽至 60s；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务；Gmail 账号下 `\All` 与 `\Important` 等虚拟全量标签建模为 `kind=view` 的派生只读视图，不进入同步队列；常规 FETCH 携带 `X-GM-LABELS`，标签成员落为 `message_locations`，视图计数与列表由物理目录位置投影得到（t086）；RFC 6154 支持 `\All` 映射为 `all` 与 `\Flagged` 映射为 `flagged`)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
+    - 出站传输层 (`src/mail_core/net/`, t089)：集中提供代理策略解析（`MAIL_CORE_OUTBOUND_PROXY` / `MAIL_CORE_NO_PROXY`、`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` 及账号级 `outbound_proxy` / `proxy_mode` 覆盖）、HTTP/HTTPS `CONNECT` 与 SOCKS5/SOCKS5h 隧道握手、直连 Pin-IP SSRF 防护（消除构建期 DNS TOCTOU 与建连后 `getpeername()` 检查，受信任回环/私网代理端点不被误拦；远程图片代理 `remote_image_proxy.py` 复用直连双栈原语并维持强制禁代理契约）、两段式超时控制（建连总预算默认 10s / 单尝试 5s 与握手后 I/O 超时 60s 分离，IPv4 优先且保留远端 `TimeoutError` 不被本地 `ENETUNREACH` 掩盖）及共享 `EndpointBulkhead` 端点负缓存熔断隔离（冷却期内快速失败且在持槽前拒绝或即时释放 `ConnectionPermit`，防止单一受阻域名拖垮全局 8 槽池）。
+    - 适配器：IMAP（同步、`open_idle_session` 与批操作统一通过 `DialedIMAP4` / `DialedIMAP4_SSL` 走出站建连原语，带 TLS SNI 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务；Gmail 账号下 `\All` 与 `\Important` 等虚拟全量标签建模为 `kind=view` 的派生只读视图，不进入同步队列；常规 FETCH 携带 `X-GM-LABELS`，标签成员落为 `message_locations`，视图计数与列表由物理目录位置投影得到（t086）；RFC 6154 支持 `\All` 映射为 `all` 与 `\Flagged` 映射为 `flagged`）、Microsoft Graph v1.0（复用同一显式代理策略解析器，well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放）。
     - 并发保护与容错：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token；Worker 捕获瞬态网络超时（`TimeoutError`、`SSLEOFError` 等）进行指数退避重试，未达重试上限时不污染账户为 `failed` 状态。
     - 同步分批：`sync_folder_metadata` 默认单任务最大页数控制在 10 页（约 500 封），避免大目录单次长时间霸占连接与 Worker 队列。
     - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空。
@@ -128,7 +129,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
     - 传输层网络抖动、超时与限流只作用于 `connectivity_state`，不得污染凭据态，也不外溢为账号认证失败或侧栏全局报警；后台静默同步故障同理不外溢。连接态熔断以连续 5 次失败且跨越 5 分钟窗口为阈值才置 `unreachable`，任一次链路成功即复位 `connected`，单次抖动只置 `degraded`。
     - Folder 级 `folders.sync_status`（`paused` / `idle`）仅用于物理 mailbox（`kind=container`）；派生视图（`kind=view`）没有暂停语义，账号健康状态变更不得触碰文件夹状态。
 2. **Worker 统一重试调度**：
-    - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`resolve_sync_context` 在顶层注入 `background` 标记，`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排，周期任务 payload 统一携带 `background`。
+    - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`WorkerJob.execution_origin`（`foreground` / `background` 非空持久化列，迁移 `20261125_0006`）作为任务执行血缘一等公民——`enqueue_job` 强制显式声明并在 `complete_job` / `reschedule_job` / `delta` / `engine` / `remote_push` 中自动继承，`resolve_sync_context` 直接依据该列结合 `SyncRequest.scope` fail-closed 裁决后台隔离（不再依赖自由 payload `"background"` 猜测），`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排。
     - 失败是否影响账号健康状态由 Worker 框架集中裁定：后台静默任务失败不触发侧栏全局报警，认证类失败才更新 `credential_state`，链路类失败累计到熔断阈值才更新 `connectivity_state`，同步任务在途状态仅由 `sync_activity` 反映；凭据态与连接态始终正交，不因单次抖动互相污染。
 
 ## 同步请求完成判定：真实工作驱动 (t082)

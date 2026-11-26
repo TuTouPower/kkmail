@@ -283,7 +283,7 @@ def test_ac003_worker_jobs_priority_governance():
         exhausted=True,
     )
     with patch("mail_core.sync.delta.build_provider", return_value=mock_prov):
-        res = sync_folder_delta(account_id=aid, folder_id=fid, worker_id="test-worker")
+        res = sync_folder_delta(account_id=aid, folder_id=fid, worker_id="test-worker", execution_origin="foreground")
         assert res["status"] == "ok"
 
     with Session() as session:

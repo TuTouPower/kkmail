@@ -23,7 +23,7 @@ _NOW = datetime(2026, 10, 27, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _job(account_id, dedupe, payload, status="pending"):
-    return WorkerJob(id=uuid.uuid4(), job_type="sync_folder_delta" if "metadata" not in dedupe else "sync_folder_metadata", dedupe_key=dedupe, payload=payload, status=status, run_after=_NOW, created_at=_NOW, updated_at=_NOW)
+    return WorkerJob(id=uuid.uuid4(), job_type="sync_folder_delta" if "metadata" not in dedupe else "sync_folder_metadata", dedupe_key=dedupe, payload=payload, status=status, run_after=_NOW, created_at=_NOW, updated_at=_NOW, execution_origin="foreground")
 
 
 def test_delta_root_still_finds_metadata_full_generation():

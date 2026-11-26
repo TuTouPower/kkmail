@@ -1,7 +1,7 @@
 ---
 slug: mail_sync_and_storage
 status: active
-tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088]
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090, t091]
 ---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
@@ -15,7 +15,7 @@ ______________________________________________________________________
 
 ### 1. IMAP 协议同步与异常容错
 
-- **连接与安全性**：强制开启 TLS 证书与主机名校验，Socket 读取默认超时放宽至 60 秒；mailbox 文件夹包含空格或特殊字符时自动带双引号转义。
+- **连接与安全性**：统一由 `src/mail_core/net/` 原语建连（覆盖短连接同步、`open_idle_session` 与 OAuth HTTP 客户端策略解析），强制开启 TLS 证书与主机名 SNI 校验，直连实施 Pin-IP SSRF 防护（禁用事后 `getpeername()` 校验），支持 HTTP/HTTPS `CONNECT` 与 SOCKS5/SOCKS5h 代理隧道；连接预算分离为有界 `connect_timeout`（默认 10s，单 IP 尝试上限 5s）与建连/TLS 握手完成后的 `io_timeout`（默认 60s），双栈建连按 IPv4 优先尝试并保留 `TimeoutError` / 远端拒绝语义不被本地 IPv6 `ENETUNREACH` 掩盖；mailbox 文件夹包含空格或特殊字符时自动带双引号转义。
 - **目录发现与 RFC 6154 属性映射**：
     - 标准角色映射：`\Sent` / 已发送 映射为 `sent`；`Deleted Messages` / `\Trash` 映射为 `trash`；`\Drafts` 映射为 `drafts`；`\All` 映射为 `all`；`\Flagged` / `\Starred` 映射为 `flagged`；
     - 结构节点处理：带有 `\NoSelect` 属性的目录作为 `paused` 结构节点保留，用于树形层级展示，系统不为其排发邮件同步作业；
@@ -24,6 +24,8 @@ ______________________________________________________________________
     - 单次元数据同步任务最大拉取批次限制为 10 页（约 500 封），避免长时间霸占 Worker 队列；
     - 遇到 `TimeoutError`、`SSLEOFError` 等网络瞬态故障时采用指数退避重试，未达重试上限不污染账号为 `failed` 状态。
 - **连接健康状态机与结构化故障分类**（t087）：`connectivity_state` 的 `unreachable` 仅在 5 分钟滑动窗口内累计 5 次传输失败且跨度达到 5 分钟时可达，窗口外失败开启新 streak，跨天累计不再升级；15 分钟无新失败的 `unreachable` 由 Worker 复核降级为 `degraded`，任何传输成功（含 IDLE 建连成功）复位 `connected`，状态迁移通过 `account.updated` 广播；故障分类使用异常类型、HTTP status、errno 与生产者附加的 `failure_code`，禁止自由文本 marker 匹配，磁盘满/句柄耗尽/配置错误不得计入连接健康。
+- **Worker 任务强类型执行血缘与后台健康隔离**（t090）：`worker_jobs.execution_origin`（`foreground` / `background`，`NOT NULL` + DB `CHECK` 约束，迁移 `20261125_0006`）作为一等公民持久化执行来源；`enqueue_job` 强制显式传入 `execution_origin`（缺失/非法值立即拒绝，无默认回落前台）；定期收件箱轮询、全夹巡检（`patrol.py`）、IDLE 建连补偿与唤醒（`idle_watcher.py`）、常规批量归档、`remote_push` 目录发现兜底及后台 `SyncRequest` 显式写入 `background`，并在 `complete_job` 后继派生、`reschedule_job` 重排及 `delta`/`engine`/`remote_push` 全部延续与重建分支自动继承（去重合并时前台优先且不篡改已认领的在途后台任务）；`resolve_sync_context` 直接基于 `WorkerJob.execution_origin` 结合 `SyncRequest.scope` fail-closed 裁决隔离，停止从自由 JSON `payload["background"]` 猜测，确保后台传输故障绝不污染账号 `connectivity_state`，同时任何域下的永久认证失败（`AUTH`）均使凭据失效。
+- **强类型结构化故障模型与白名单诊断投影**（t091）：`StructuredFailure`（`domain`、`error_type`、`phase`、`http_status`、`errno`、`socks_reply`、`retry_after_s`、`symbolic_code`）作为故障分类（`sync/context.classify_failure`）与诊断投影的唯一事实来源；`src/mail_core/net/` 与 Provider/HTTP/IMAP 边界在捕获点附加受控 `FailurePhase`（`dns` / `proxy_connect` / `tcp_connect` / `tls` / `auth` / `http` / `imap`），全链路传递至日志（`logging_config.py`）、`worker_jobs.last_error`（`sync/jobs.py`）与账号健康态 `last_connectivity_error`（`accounts/health.py`），并以 `errno=` / `phase=` / `status=` 白名单投影取代易遭正则误杀的 `"code=<errno>"` 文本回传与二次摘要剥离；`security/redact.py` 收窄至不可信自由文本（日志文本、栈追踪、URL query `?code=`/`?token=`、JSON 凭据、`Authorization`/`Cookie`/JWT/DSN）脱敏边界，非网络 `OSError`（如 `ENOSPC`/`EMFILE`/`EACCES`）与自由文本错误严格不归入 `TRANSPORT`。
 
 ### 2. Microsoft Graph 同步
 
@@ -43,8 +45,9 @@ ______________________________________________________________________
     - **60**：后台正文归档批次续跑；
     - **75**：文件夹定时增量轮询（设去重键 `delta:{account_id}:{folder_id}`，防止任务堆积）；
     - **80**：定期数据对账检查。
-2. **连接池预算控制**：
+2. **连接池预算控制与端点熔断隔离**：
     - 全局与后台网络连接设有硬性槽位控制，通过 PostgreSQL 会话级 Advisory Lock 协同持有；
+    - 不可达端点由进程级 `EndpointBulkhead`（按 `(proxy_safe_key, host, port)` 索引，仅统计建连阶段传输超时/不可达失败）提供有界负缓存冷却与单探针半开恢复；冷却窗口内并发请求在获取全局连接槽位前即快速失败并立即释放预算，避免同一受阻服务商的多账号重试耗尽槽位饿死其余健康账号；
     - 容量不足时任务通过 `reschedule_job` 延后执行，不计入失败重试次数。
 3. **执行跟踪与孤儿清理**：
     - 同步作业持有唯一的执行代际 UUID，请求通过关联表绑定具体代次；

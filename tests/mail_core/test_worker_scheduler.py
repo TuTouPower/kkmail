@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
-from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
 from mail_core.worker.main import schedule_periodic_inbox_sync
 
@@ -81,7 +81,10 @@ def test_ac001_schedules_overdue_inbox():
         assert job is not None
         assert job.status == JobStatus.PENDING.value
         assert job.priority == 75
-        assert job.payload == {"folder_id": str(folder_id), "background": True}
+        # t090: periodic background origin is now persisted on the typed
+        # WorkerJob.execution_origin column rather than JSON payload['background'].
+        assert job.execution_origin == ExecutionOrigin.BACKGROUND.value
+        assert job.payload == {"folder_id": str(folder_id)}
 
 
 def test_ac001_ignores_disabled_accounts_and_paused_or_non_inbox_folders():
@@ -138,6 +141,8 @@ def test_ac002_staggers_multiple_accounts():
             ).all()
         )
         assert len(jobs) == 5
+        assert all(j.execution_origin == ExecutionOrigin.BACKGROUND.value for j in jobs)
+        assert all("background" not in (j.payload or {}) for j in jobs)
 
         # Verify staggering: run_after must not all be identical
         run_afters = [j.run_after for j in jobs]
@@ -156,6 +161,7 @@ def test_ac006_deduplicates_in_flight_and_heals_after_terminal_failure():
         job_pending = WorkerJob(
             account_id=acc_id,
             job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND.value,
             dedupe_key=f"delta:{acc_id}:{folder_id}",
             status=JobStatus.PENDING.value,
             payload={"folder_id": str(folder_id)},

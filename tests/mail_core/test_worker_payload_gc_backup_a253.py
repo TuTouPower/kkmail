@@ -21,7 +21,7 @@ from mail_core.worker.handlers import _validate_job_payload, handle_job
 
 
 def _job(job_type: str, payload):
-    job = WorkerJob(job_type=job_type, status="claimed", payload=payload)
+    job = WorkerJob(job_type=job_type, status="claimed", payload=payload, execution_origin="foreground")
     job.id = uuid.uuid4()
     return job
 

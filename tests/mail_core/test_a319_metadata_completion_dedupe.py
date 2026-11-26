@@ -99,7 +99,8 @@ def test_metadata_completion_enqueues_carry_dedupe_keys(monkeypatch):
     monkeypatch.setattr(engine, "enqueue_job", _enqueue)
 
     result = engine.sync_folder_metadata(
-        account_id, folder_id, worker_id="w-a319", store=object()
+        account_id, folder_id, worker_id="w-a319", store=object(),
+        execution_origin="foreground",
     )
     assert result["status"] == "ok"
     assert result["exhausted"] is True

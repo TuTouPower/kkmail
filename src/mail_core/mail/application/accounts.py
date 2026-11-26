@@ -29,7 +29,7 @@ from mail_core.accounts import (
     update_public_settings,
 )
 from mail_core.db.session import get_session_factory
-from mail_core.mail.domain.enums import OutboxEventType
+from mail_core.mail.domain.enums import ExecutionOrigin, OutboxEventType
 from mail_core.mail.storage.models import Account, AccountGroup, OutboxEvent
 from mail_core.security.redact import safe_error
 
@@ -112,7 +112,7 @@ def _run_in_session() -> Iterator[Any]:
 
 def _enqueue_initial_sync(session: Any, account_id: UUID) -> None:
     try:
-        enqueue_account_sync(session, account_id)
+        enqueue_account_sync(session, account_id, execution_origin=ExecutionOrigin.FOREGROUND)
     except Exception as exc:
         log.warning("initial sync enqueue failed for account %s: %s", account_id, safe_error(exc))
 
@@ -329,7 +329,7 @@ def delete_account_app(account_id: UUID) -> None:
 
 def sync_account_app(account_id: UUID) -> SyncJobDTO:
     with _run_in_session() as session:
-        job_id = enqueue_account_sync(session, account_id)
+        job_id = enqueue_account_sync(session, account_id, execution_origin=ExecutionOrigin.FOREGROUND)
         return SyncJobDTO(job_id=str(job_id))
 
 
@@ -366,7 +366,7 @@ def sync_all_accounts_app(page_size: int = 500) -> SyncAllDTO:
             if len(page) < page_size:
                 break
         for account_id in account_ids:
-            job_id = enqueue_account_sync(session, account_id)
+            job_id = enqueue_account_sync(session, account_id, execution_origin=ExecutionOrigin.FOREGROUND)
             if len(job_ids) < SYNC_ALL_JOB_ID_SAMPLE_LIMIT:
                 job_ids.append(str(job_id))
         log.info("sync-all enqueued %d jobs", len(account_ids))

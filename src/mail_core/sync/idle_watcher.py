@@ -41,7 +41,7 @@ from typing import Any, Callable
 
 from sqlalchemy import func, select
 
-from mail_core.mail.domain.enums import JobType, SyncStatus
+from mail_core.mail.domain.enums import ExecutionOrigin, JobType, SyncStatus
 from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.models import (
     Account,
@@ -650,6 +650,7 @@ class IdleWatcherManager:
             enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=ExecutionOrigin.BACKGROUND,
                 account_id=watch.account_id,
                 payload={"folder_id": str(watch.folder_id)},
                 priority=60,

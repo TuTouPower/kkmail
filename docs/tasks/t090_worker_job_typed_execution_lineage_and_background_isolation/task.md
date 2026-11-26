@@ -32,12 +32,12 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：`WorkerJob` 具有持久化的非空执行血缘字段；新增 Alembic 迁移在真实 PostgreSQL 上通过 `upgrade head` → `downgrade` → `upgrade head` 双向循环与 ORM schema 0 drift 校验。
-- [ ] AC-002：所有任务入队入口均显式指定前台或后台执行血缘（省略则立即在入队接口被显式拒绝），不存在「缺省静默变前台」的路径。
-- [ ] AC-003：`worker/main.py` 周期轮询、`patrol.py` 巡检、`idle_watcher.py` 建连补偿/IDLE 唤醒入队的同步任务及其任意重排/续跑/后继任务（含 `LeaseBusy`、`RateLimitedError`、`CAPACITY_ERRORS`、`FencingMismatch`、多页未穷尽与 `complete_job` 后继）全部保留后台血缘，在发生传输失败时绝不把账号 `connectivity_state` 置为 `degraded` 或 `unreachable`。
-- [ ] AC-004：用户显式触发的前台同步任务（及由其派生的同请求子任务与重试）发生传输失败仍按既有连续窗口熔断规则更新 `connectivity_state`，但认证错误（`AUTH`）无论前台后台均按契约使 `credential_state` 失效。
-- [ ] AC-005：全量真实 PostgreSQL 测试套件（`scripts/run-mail-core-tests.sh run`，含 `test_migration_validation` 与 `test_migrate_to_unified_baseline`）及 `test_cmd` 全部通过。
-- [ ] AC-006：同步更新 `docs/specs/mail_sync_and_storage.md`（登记 `t090`）及对应 blueprint 文档。
+- [x] AC-001：`WorkerJob` 具有持久化的非空执行血缘字段；新增 Alembic 迁移在真实 PostgreSQL 上通过 `upgrade head` → `downgrade` → `upgrade head` 双向循环与 ORM schema 0 drift 校验。
+- [x] AC-002：所有任务入队入口均显式指定前台或后台执行血缘（省略则立即在入队接口被显式拒绝），不存在「缺省静默变前台」的路径。
+- [x] AC-003：`worker/main.py` 周期轮询、`patrol.py` 巡检、`idle_watcher.py` 建连补偿/IDLE 唤醒入队的同步任务及其任意重排/续跑/后继任务（含 `LeaseBusy`、`RateLimitedError`、`CAPACITY_ERRORS`、`FencingMismatch`、多页未穷尽与 `complete_job` 后继）全部保留后台血缘，在发生传输失败时绝不把账号 `connectivity_state` 置为 `degraded` 或 `unreachable`。
+- [x] AC-004：用户显式触发的前台同步任务（及由其派生的同请求子任务与重试）发生传输失败仍按既有连续窗口熔断规则更新 `connectivity_state`，但认证错误（`AUTH`）无论前台后台均按契约使 `credential_state` 失效。
+- [x] AC-005：全量真实 PostgreSQL 测试套件（`scripts/run-mail-core-tests.sh run`，含 `test_migration_validation` 与 `test_migrate_to_unified_baseline`）及 `test_cmd` 全部通过。
+- [x] AC-006：同步更新 `docs/specs/mail_sync_and_storage.md`（登记 `t090`）及对应 blueprint 文档。
 
 ### 可测试性声明
 
