@@ -26,7 +26,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import ExecutionOrigin, JobType
-from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.models import (
     Account,
     Folder,

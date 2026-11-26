@@ -26,7 +26,6 @@ from mail_core.mail.domain.enums import (
     normalize_execution_origin,
 )
 from mail_core.mail.domain.folder_views import (
-    CONTAINER,
     folder_sync_skip_reason,
     is_gmail_account,
     is_syncable_folder,
