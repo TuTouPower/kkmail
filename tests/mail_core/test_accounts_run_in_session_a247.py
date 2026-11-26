@@ -66,13 +66,20 @@ def test_mutating_apps_commit_once_on_success(monkeypatch):
     session2 = _FakeSession()
     _patch_factory(monkeypatch, session2)
     job_id = uuid.uuid4()
-    monkeypatch.setattr(
-        accounts_app,
-        "enqueue_account_sync",
-        lambda s, aid, *, execution_origin: job_id,
-    )
+    seen_origin: list[object] = []
+
+    def _fake_enqueue_account_sync(s, aid, *, execution_origin):
+        seen_origin.append(execution_origin)
+        return job_id
+
+    monkeypatch.setattr(accounts_app, "enqueue_account_sync", _fake_enqueue_account_sync)
     result = accounts_app.sync_account_app(uuid.uuid4())
     assert result.job_id == str(job_id)
+    assert seen_origin == ["foreground"] or str(seen_origin[0]) == "ExecutionOrigin.FOREGROUND"
+    assert getattr(seen_origin[0], "value", seen_origin[0]) == "foreground"
+    from mail_core.mail.domain.enums import ExecutionOrigin
+
+    assert seen_origin[0] is ExecutionOrigin.FOREGROUND
     assert session2.commits == 1
 
     session3 = _FakeSession()

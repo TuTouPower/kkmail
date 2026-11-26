@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from mail_core.mail.application.accounts import create_account_app
-from mail_core.mail.domain.enums import JobType
+from mail_core.mail.domain.enums import ExecutionOrigin, JobType
 from mail_core.mail.storage.models import WorkerJob
 from mail_core.providers.imap import ImapProvider
 
@@ -152,6 +152,7 @@ def test_create_account_app_enqueues_initial_sync():
         )
         assert job is not None
         assert job.status in ("pending", "claimed", "done")
+        assert job.execution_origin == ExecutionOrigin.FOREGROUND.value
 
 
 @pytest.mark.parametrize(

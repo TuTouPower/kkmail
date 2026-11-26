@@ -9,7 +9,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 import mail_core.sync.delta as delta_mod
 import mail_core.sync.engine as engine_mod
@@ -38,7 +38,13 @@ from mail_core.mail.storage.models import (
     WorkerJob,
 )
 from mail_core.net.bulkhead import EndpointCircuitOpenError
-from mail_core.providers.base import DeltaPage, FolderStatus, MetadataPage, RemoteMessageMeta
+from mail_core.providers.base import (
+    DeltaPage,
+    FolderStatus,
+    MetadataPage,
+    RemoteMessageMeta,
+    RemoteOperationResult,
+)
 from mail_core.providers.http import CursorInvalidError, PermanentAuthError, RateLimitedError
 from mail_core.sync.idle_watcher import IdleWatcherManager, _Watch
 from mail_core.sync.jobs import claim_jobs, complete_job, enqueue_job
@@ -352,29 +358,183 @@ def test_t090_background_continuations_rebuilds_and_push_fallback_inherit(monkey
     for dk in (f"reconcile:{aid}:{sent_id}", f"delta:{aid}:{sent_id}", f"archive_mime_batch:{aid}"):
         _assert_job_origin(Session, dk, ExecutionOrigin.BACKGROUND.value)
 
-    # Branch 4: remote_push missing target folder discovery fallback stays BACKGROUND
+    # Branch 4: public push_remote_operations move fallback missing target folder discovery stays BACKGROUND
+    from mail_core.mail.storage.models import RemoteOperation
+
     with Session() as session:
-        session.add(
-            Message(
-                id=uuid.uuid4(),
-                account_id=aid,
-                remote_id="move-1",
-                subject="move me",
-                from_address="a@b.c",
-                sort_time=_NOW,
-            )
-        )
-        session.flush()
-        remote_push_mod._persist_move_remote_state(
-            session,
+        msg_move = Message(id=uuid.uuid4(), account_id=aid, remote_id="move-1", subject="move me", from_address="a@b.c", sort_time=_NOW)
+        session.add(msg_move)
+        op_move = RemoteOperation(
             account_id=aid,
-            provider_type="imap",
+            entity_key="msg:move-1:move",
             op_type="move",
-            desired_state={"remote_id": "move-1", "folder_remote_id": "INBOX"},
-            remote_state={"folder_remote_id": "NEW_FOLDER", "remote_id": "move-2"},
+            desired_state={"remote_id": "move-1", "folder_remote_id": "INBOX", "dest_folder_remote_id": "NEW_FOLDER"},
+            status="pending",
         )
+        session.add(op_move)
         session.commit()
+        op_move_id, msg_move_id = op_move.id, msg_move.id
+
+    monkeypatch.setattr(
+        remote_push_mod,
+        "build_provider",
+        lambda *_a, **_k: type(
+            "_MoveProvider",
+            (),
+            {
+                "apply_remote_operations": lambda _self, items: [
+                    (items[0].op_id, RemoteOperationResult(success=True, remote_state={"folder_remote_id": "NEW_FOLDER", "remote_id": "move-2"}))
+                ]
+            },
+        )(),
+    )
+    res_move = remote_push_mod.push_remote_operations(aid, worker_id="w-move", execution_origin=ExecutionOrigin.BACKGROUND)
+    assert res_move == {"status": "ok", "pushed": 1, "failed": 0}
     _assert_job_origin(Session, f"sync-folders:{aid}", ExecutionOrigin.BACKGROUND.value)
+    with Session() as session:
+        assert session.get(RemoteOperation, op_move_id).status == "done"
+        assert session.get(Message, msg_move_id).remote_id == "move-2"
+
+
+def test_t090_metadata_and_discovery_background_reschedules_inherit(monkeypatch):
+    """p097: sync_account_folders & sync_folder_metadata background reschedules/full binding inherit origin."""
+    from mail_core.mail.storage.models import SyncRequestTarget, SyncRequestTargetJob
+    from mail_core.sync.leases import release_lease
+
+    Session = get_session_factory()
+    with Session() as session:
+        aid, _inbox_id, sent_id = _seed_account_and_folders(session, baseline=False)
+        session.commit()
+
+    def _clear(dkey: str | None = None) -> None:
+        _assert_single_job_origin_and_delete(Session, dkey, ExecutionOrigin.BACKGROUND.value) if dkey else None
+
+    # 1. sync_account_folders CAPACITY_ERRORS & RateLimitedError
+    for exc_factory, status in (
+        (lambda: EndpointCircuitOpenError("co", endpoint=("direct", "imap.test", 993), retry_after_s=10.0), "capacity_unavailable"),
+        (lambda: RateLimitedError("429", retry_after_seconds=12), "rate_limited"),
+    ):
+        def _fail_list(_f=exc_factory):
+            raise _f()
+
+        monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, _fn=_fail_list, **_k: type("_P", (), {"list_folder_catalog": staticmethod(_fn)})())
+        assert engine_mod.sync_account_folders(aid, worker_id="w-disc", execution_origin="background")["status"] == status
+        _clear(f"sync:{aid}")
+
+    # 2. sync_folder_metadata LeaseBusy -> background
+    with Session() as session:
+        holder_lease = acquire_lease(session, account_id=aid, owner_id="holder", ttl=timedelta(minutes=5))
+        holder_token = holder_lease.fencing_token
+        session.commit()
+    assert engine_mod.sync_folder_metadata(aid, sent_id, worker_id="w-lb", execution_origin="background")["status"] == "lease_busy"
+    _clear(f"metadata:{aid}:{sent_id}")
+    with Session() as session:
+        release_lease(session, account_id=aid, owner_id="holder", fencing_token=holder_token)
+        session.commit()
+
+    # 3. sync_folder_metadata CAPACITY_ERRORS / RateLimitedError / CursorInvalidError / exhausted=False
+    meta_dk = f"metadata:{aid}:{sent_id}"
+    for fetch_fn, want_status in (
+        (lambda _rid, _c: (_ for _ in ()).throw(EndpointCircuitOpenError("co", endpoint=("direct", "imap.test", 993), retry_after_s=10.0)), "capacity_unavailable"),
+        (lambda _rid, _c: (_ for _ in ()).throw(RateLimitedError("429", retry_after_seconds=15)), "rate_limited"),
+        (lambda _rid, _c: (_ for _ in ()).throw(CursorInvalidError("uidvalidity reset")), "cursor_invalid"),
+        (lambda _rid, _c: MetadataPage(items=[], next_cursor={"modseq": 2}, exhausted=False), "ok"),
+    ):
+        monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, _fn=fetch_fn, **_k: type("_MP", (), {"fetch_metadata_page": staticmethod(_fn)})())
+        assert engine_mod.sync_folder_metadata(aid, sent_id, worker_id="w-m", execution_origin="background", max_pages=1)["status"] == want_status
+        _clear(meta_dk)
+
+    # 4. sync_folder_metadata full=True and request_id is not None -> reconcile inherits BACKGROUND and binds target
+    with Session() as session:
+        session.execute(delete(WorkerJob).where(WorkerJob.account_id == aid))
+        req, _ = create_sync_request(session, client_request_id=f"p097-full-{uuid.uuid4().hex}", mode="full", trigger="manual", scope={"account_id": str(aid), "folder_id": str(sent_id), "background": True}, account_id=aid, folder_id=sent_id)
+        session.commit()
+        scan_gen = uuid.UUID(session.scalar(select(WorkerJob).where(WorkerJob.account_id == aid)).payload["scan_generation"])
+        req_id = req.id
+        session.execute(delete(SyncRequestTargetJob))
+        session.execute(delete(WorkerJob).where(WorkerJob.account_id == aid))
+        session.commit()
+
+    monkeypatch.setattr(
+        engine_mod,
+        "build_provider",
+        lambda *_a, **_k: type("_DoneMP", (), {"fetch_metadata_page": staticmethod(lambda _r, _c: MetadataPage(items=[], next_cursor={"modseq": 9}, exhausted=True))})(),
+    )
+    assert engine_mod.sync_folder_metadata(aid, sent_id, worker_id="w-full", execution_origin="background", full=True, scan_generation=scan_gen, request_id=req_id)["exhausted"] is True
+    for dk in (f"reconcile:{aid}:{sent_id}", f"delta:{aid}:{sent_id}", f"archive_mime_batch:{aid}"):
+        _assert_job_origin(Session, dk, ExecutionOrigin.BACKGROUND.value)
+    with Session() as session:
+        target = session.scalar(select(SyncRequestTarget).where(SyncRequestTarget.request_id == req_id))
+        assert target is not None and session.scalar(select(SyncRequestTargetJob).where(SyncRequestTargetJob.target_id == target.id, SyncRequestTargetJob.phase == "reconcile")) is not None
+
+
+def test_t090_push_remote_operations_retries_and_followup_inherit(monkeypatch):
+    """p097: push_remote_operations capacity/retry/rate-limit/batch/delayed followups inherit BACKGROUND."""
+    from mail_core.mail.storage.models import RemoteOperation
+
+    Session = get_session_factory()
+    with Session() as session:
+        aid, _inbox_id, _sent_id = _seed_account_and_folders(session)
+        op1 = RemoteOperation(account_id=aid, entity_key="msg:1:read", op_type="mark_read", desired_state={"remote_id": "1", "is_read": True}, status="pending")
+        op2 = RemoteOperation(account_id=aid, entity_key="msg:2:read", op_type="mark_read", desired_state={"remote_id": "2", "is_read": True}, status="pending", attempts=2)
+        session.add_all([op1, op2])
+        session.commit()
+        op1_id, op2_id = op1.id, op2.id
+
+    push_dk = f"remote-op-push:{aid}"
+    co_err = EndpointCircuitOpenError("co", endpoint=("direct", "imap.test", 993), retry_after_s=15.0)
+    # 1. Capacity on build_provider & batch apply -> capacity_unavailable + BACKGROUND
+    for mode in ("build", "apply"):
+        if mode == "build":
+            monkeypatch.setattr(remote_push_mod, "build_provider", lambda *_a, **_k: (_ for _ in ()).throw(co_err))
+        else:
+            monkeypatch.setattr(remote_push_mod, "build_provider", lambda *_a, **_k: type("_P", (), {"apply_remote_operations": staticmethod(lambda _i: (_ for _ in ()).throw(co_err))})())
+        assert remote_push_mod.push_remote_operations(aid, worker_id="w-p", execution_origin="background")["status"] == "capacity_unavailable"
+        _assert_single_job_origin_and_delete(Session, push_dk, ExecutionOrigin.BACKGROUND.value)
+        with Session() as session:
+            for oid in (op1_id, op2_id):
+                op = session.get(RemoteOperation, oid)
+                op.next_attempt_at = None
+            session.commit()
+
+    # 2. Rate-limit + transient per-op failure -> delayed followup inherits BACKGROUND
+    monkeypatch.setattr(
+        remote_push_mod,
+        "build_provider",
+        lambda *_a, **_k: type(
+            "_FailP",
+            (),
+            {
+                "apply_remote_operations": staticmethod(
+                    lambda items: [
+                        (items[0].op_id, RemoteOperationResult(success=False, error="HTTP 429 rate limited", remote_state={"retry_after": 30})),
+                        (items[1].op_id, RemoteOperationResult(success=False, error="connection reset by peer")),
+                    ]
+                )
+            },
+        )(),
+    )
+    assert remote_push_mod.push_remote_operations(aid, worker_id="w-r", execution_origin="background")["failed"] == 2
+    _assert_single_job_origin_and_delete(Session, push_dk, ExecutionOrigin.BACKGROUND.value)
+
+    # 3. Empty eligible work with future next_attempt_at -> delayed followup inherits BACKGROUND
+    assert remote_push_mod.push_remote_operations(aid, worker_id="w-d", execution_origin="background")["pushed"] == 0
+    _assert_single_job_origin_and_delete(Session, push_dk, ExecutionOrigin.BACKGROUND.value)
+
+    # 4. Partial batch (limit=1 of 2 ready ops) -> immediate followup inherits BACKGROUND
+    with Session() as session:
+        for oid in (op1_id, op2_id):
+            op = session.get(RemoteOperation, oid)
+            op.next_attempt_at = None
+            op.attempts = 0
+        session.commit()
+    monkeypatch.setattr(
+        remote_push_mod,
+        "build_provider",
+        lambda *_a, **_k: type("_OkP", (), {"apply_remote_operations": staticmethod(lambda items: [(it.op_id, RemoteOperationResult(success=True)) for it in items])})(),
+    )
+    assert remote_push_mod.push_remote_operations(aid, worker_id="w-b", execution_origin="background", limit=1)["pushed"] == 1
+    _assert_single_job_origin_and_delete(Session, push_dk, ExecutionOrigin.BACKGROUND.value)
 
 
 def test_t090_coalescing_precedence_successor_inheritance_and_fg_vs_auth(monkeypatch):

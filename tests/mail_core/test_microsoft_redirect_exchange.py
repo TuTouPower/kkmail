@@ -690,3 +690,36 @@ def test_exchange_request_model_has_no_dead_email_field():
     assert "email" not in ExchangeRedirectUrlRequest.model_fields
     req = ExchangeRedirectUrlRequest(redirected_url=REDIRECT, email="typed@outlook.com")
     assert not hasattr(req, "email")
+
+
+@pytest.mark.skipif(not os.environ.get("MAIL_CORE_DATABASE_URL"), reason="MAIL_CORE_DATABASE_URL not set")
+def test_enqueue_sync_best_effort_tags_foreground_origin():
+    import mail_core.api.oauth_routes as routes
+    from mail_core.accounts.service import create_account
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import ExecutionOrigin, JobType
+    from mail_core.mail.storage.models import WorkerJob
+    from sqlalchemy import select
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc = create_account(
+            session,
+            email=f"best-effort-{uuid.uuid4().hex[:8]}@outlook.com",
+            provider="graph",
+            config={"provider_profile": "microsoft", "oauth_client_type": "public"},
+            credentials={"client_id": DEFAULT_MICROSOFT_CLIENT_ID, "refresh_token": "r"},
+        )
+        session.commit()
+        aid = acc.id
+
+    routes._enqueue_sync_best_effort(aid)
+    with Session() as session:
+        job = session.scalar(
+            select(WorkerJob).where(
+                WorkerJob.account_id == aid,
+                WorkerJob.job_type == JobType.SYNC_ACCOUNT_FOLDERS.value,
+            )
+        )
+        assert job is not None
+        assert job.execution_origin == ExecutionOrigin.FOREGROUND.value

@@ -140,6 +140,9 @@ def test_a25_quota_recovery_reschedules_paused_archives(tmp_path, monkeypatch):
             )
             assert job is not None
             assert job.dedupe_key == f"archive_mime_batch:{account_id}"
+            from mail_core.mail.domain.enums import ExecutionOrigin
+
+            assert job.execution_origin == ExecutionOrigin.BACKGROUND.value
 
             # Idempotent call does not re-resume already pending tasks
             assert maybe_resume_quota_paused_archives(account_id=account_id) == 0
