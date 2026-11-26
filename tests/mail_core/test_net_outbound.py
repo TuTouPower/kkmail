@@ -382,3 +382,94 @@ def test_oauth_urllib_honors_http_https_socks5h_no_proxy_and_errors(
             monkeypatch.setenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "1")
             assert urllib_json_request("GET", url, timeout=5.0)["ok"] is True
             assert len(socks_proxy.connects) == 1
+
+
+def test_urlopen_outbound_default_ports_and_host_header_through_proxies(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+):
+    """HTTPS URLs without explicit :port must tunnel to 443 (never HTTP default 80) and omit :443 in Host."""
+    from mail_core.net import default_bulkhead
+    from mail_core.net.http_client import _DialedHTTPConnection, _DialedHTTPSConnection
+
+    https_conn = _DialedHTTPSConnection("graph.test")
+    assert https_conn.port == 443
+    assert https_conn.default_port == 443
+    tls_conn_via_base = _DialedHTTPConnection("graph.test", use_tls=True)
+    assert tls_conn_via_base.port == 443
+    assert tls_conn_via_base.default_port == 443
+    ipv6_https_conn = _DialedHTTPSConnection("[2001:db8::1]")
+    assert ipv6_https_conn.host == "2001:db8::1"
+    assert ipv6_https_conn.port == 443
+    assert ipv6_https_conn.default_port == 443
+    explicit_https_conn = _DialedHTTPSConnection("graph.test:8443")
+    assert explicit_https_conn.port == 8443
+    plain_conn = _DialedHTTPConnection("plain.test")
+    assert plain_conn.port == 80
+    assert plain_conn.default_port == 80
+
+    target_cert, target_key = write_self_signed_cert(tmp_path, ["graph.test"], prefix="graph-default")
+    client_ctx = client_ssl_context([target_cert])
+    monkeypatch.setattr("ssl.create_default_context", lambda *a, **kw: client_ctx)
+
+    real_getaddrinfo = socket.getaddrinfo
+    monkeypatch.setattr(
+        "mail_core.net.dialer.socket.getaddrinfo",
+        lambda host, port, *a: (
+            [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", int(port)))]
+            if str(host) in ("graph.test", "plain.test")
+            else real_getaddrinfo(host, port, *a)
+        ),
+    )
+
+    default_bulkhead().reset()
+    try:
+        with LoopbackHttpsServer(target_cert, target_key) as https_srv, LoopbackHttpsServer(
+            None, None
+        ) as http_srv:
+            # Port 80 routes to plaintext HTTP server; port 443 routes to TLS server.
+            # If HTTPS mistakenly dialed port 80, TLS handshake fails with WRONG_VERSION_NUMBER.
+            with LoopbackHttpConnectProxy(
+                "127.0.0.1",
+                http_srv.port,
+                port_map={
+                    80: ("127.0.0.1", http_srv.port),
+                    443: ("127.0.0.1", https_srv.port),
+                },
+            ) as http_proxy:
+                monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{http_proxy.port}")
+                monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{http_proxy.port}")
+
+                https_data = urllib_json_request(
+                    "GET", "https://graph.test/v1.0/me", timeout=5.0
+                )
+                assert https_data["ok"] is True
+                token_data = default_urllib_token_post(
+                    "POST",
+                    "https://graph.test/oauth2/v2.0/token",
+                    {"grant_type": "refresh_token"},
+                    timeout=5.0,
+                )
+                assert token_data["access_token"] == "tok-123"
+                plain_data = urllib_json_request(
+                    "GET", "http://plain.test/health", timeout=5.0
+                )
+                assert plain_data["ok"] is True
+
+                assert http_proxy.requests == [
+                    "graph.test:443",
+                    "graph.test:443",
+                    "plain.test:80",
+                ]
+                assert https_srv.sni_seen == ["graph.test", "graph.test"]
+                assert https_srv.host_headers == ["graph.test", "graph.test"]
+                assert http_srv.host_headers == ["plain.test"]
+
+            with LoopbackSocks5Proxy("127.0.0.1", https_srv.port) as socks_proxy:
+                monkeypatch.setenv("HTTPS_PROXY", f"socks5h://127.0.0.1:{socks_proxy.port}")
+                https_via_socks = urllib_json_request(
+                    "GET", "https://graph.test/v1.0/me", timeout=5.0
+                )
+                assert https_via_socks["ok"] is True
+                assert socks_proxy.connects == [(0x03, "graph.test", 443)]
+    finally:
+        default_bulkhead().reset()

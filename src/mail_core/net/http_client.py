@@ -22,6 +22,8 @@ from mail_core.net.proxy import ProxyConfig, env_would_proxy_url, resolve_outbou
 
 
 class _DialedHTTPConnection(http.client.HTTPConnection):
+    default_port = http.client.HTTPConnection.default_port
+
     def __init__(
         self,
         host: str,
@@ -34,12 +36,24 @@ class _DialedHTTPConnection(http.client.HTTPConnection):
         security_policy: OutboundSecurityPolicy | None = None,
         bulkhead: EndpointBulkhead | None = ...,  # type: ignore[assignment]
         ssl_context: ssl.SSLContext | None = None,
-        use_tls: bool = False,
+        use_tls: bool | None = None,
     ) -> None:
         resolved_timeout = (
             DEFAULT_IO_TIMEOUT_S
             if timeout is socket._GLOBAL_DEFAULT_TIMEOUT
             else timeout
+        )
+        effective_tls = (
+            type(self).default_port == http.client.HTTPSConnection.default_port
+            if use_tls is None
+            else bool(use_tls)
+        )
+        # HTTPConnection.__init__ derives self.port and HTTPConnection.putrequest()
+        # Host-header omission from self.default_port, so align it before super().
+        self.default_port = (
+            http.client.HTTPSConnection.default_port
+            if effective_tls
+            else http.client.HTTPConnection.default_port
         )
         super().__init__(host, port=port, timeout=resolved_timeout)
         self._dial_proxy = dial_proxy
@@ -48,10 +62,10 @@ class _DialedHTTPConnection(http.client.HTTPConnection):
         self._security_policy = security_policy
         self._bulkhead = bulkhead
         self._ssl_context = ssl_context
-        self._use_tls = use_tls
+        self._use_tls = effective_tls
 
     def connect(self) -> None:
-        target_port = int(self.port or (443 if self._use_tls else 80))
+        target_port = int(self.port or self.default_port)
         self.sock = dial_stream(
             self.host,
             target_port,
@@ -64,6 +78,12 @@ class _DialedHTTPConnection(http.client.HTTPConnection):
             io_timeout=self.timeout,
             bulkhead=self._bulkhead,
         )
+
+
+class _DialedHTTPSConnection(_DialedHTTPConnection):
+    """TLS-enabled dialed connection matching stdlib HTTPSConnection.default_port (443)."""
+
+    default_port = http.client.HTTPSConnection.default_port
 
 
 class _DialedHTTPHandler(urllib.request.HTTPHandler):
@@ -95,11 +115,10 @@ class _DialedHTTPSHandler(urllib.request.HTTPSHandler):
         self._ssl_context = context
 
     def https_open(self, req: urllib.request.Request) -> Any:
-        def _factory(host: str, **kwargs: Any) -> _DialedHTTPConnection:
-            return _DialedHTTPConnection(
+        def _factory(host: str, **kwargs: Any) -> _DialedHTTPSConnection:
+            return _DialedHTTPSConnection(
                 host,
                 timeout=kwargs.get("timeout", DEFAULT_IO_TIMEOUT_S),
-                use_tls=True,
                 ssl_context=self._ssl_context,
                 **self._opener_kwargs,
             )

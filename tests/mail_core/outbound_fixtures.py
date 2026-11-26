@@ -118,11 +118,13 @@ class LoopbackHttpConnectProxy:
         expected_auth: tuple[str, str] | None = None,
         forced_status: int | None = None,
         tls_cert_key: tuple[Path, Path] | None = None,
+        port_map: dict[int, tuple[str, int]] | None = None,
     ) -> None:
         self.upstream_host = upstream_host
         self.upstream_port = upstream_port
         self.expected_auth = expected_auth
         self.forced_status = forced_status
+        self.port_map = dict(port_map) if port_map else None
         self.requests: list[str] = []
         self._tls_ctx: ssl.SSLContext | None = None
         if tls_cert_key is not None:
@@ -169,7 +171,8 @@ class LoopbackHttpConnectProxy:
                 buf.extend(chunk)
             lines = buf.decode("latin-1").split("\r\n")
             first_parts = lines[0].split(" ")
-            self.requests.append(first_parts[1] if len(first_parts) >= 2 else "")
+            authority = first_parts[1] if len(first_parts) >= 2 else ""
+            self.requests.append(authority)
 
             if self.forced_status is not None:
                 client.sendall(f"HTTP/1.1 {self.forced_status} Err\r\nContent-Length: 0\r\n\r\n".encode("ascii"))
@@ -189,7 +192,13 @@ class LoopbackHttpConnectProxy:
                     client.close()
                     return
 
-            upstream = socket.create_connection((self.upstream_host, self.upstream_port), timeout=5.0)
+            target_host, target_port = self.upstream_host, self.upstream_port
+            if self.port_map and ":" in authority:
+                port_part = authority.rsplit(":", 1)[1]
+                if port_part.isdigit() and int(port_part) in self.port_map:
+                    target_host, target_port = self.port_map[int(port_part)]
+
+            upstream = socket.create_connection((target_host, target_port), timeout=5.0)
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             leftover = bytes(buf.split(b"\r\n\r\n", 1)[1])
             if leftover:
@@ -365,11 +374,13 @@ class LoopbackHttpsServer:
     def __init__(self, cert_path: Path | None, key_path: Path | None) -> None:
         self.sni_seen: list[str | None] = []
         self.requests: list[str] = []
+        self.host_headers: list[str | None] = []
         outer = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802
                 outer.requests.append(self.path)
+                outer.host_headers.append(self.headers.get("Host"))
                 if self.path.endswith(".png"):
                     payload, ctype = VALID_1X1_PNG, "image/png"
                 else:
@@ -382,6 +393,7 @@ class LoopbackHttpsServer:
 
             def do_POST(self):  # noqa: N802
                 outer.requests.append(self.path)
+                outer.host_headers.append(self.headers.get("Host"))
                 _ = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 payload = b'{"access_token": "tok-123", "expires_in": 3600}'
                 self.send_response(200)
