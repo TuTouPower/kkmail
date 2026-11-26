@@ -352,136 +352,22 @@ def _parse_from(value: str) -> tuple[str, str | None]:
     name, addr = email.utils.parseaddr(value or "")
     return (addr or value or "", name or None)
 
-# IMAP UIDs are per-mailbox; bare UIDs collide across folders. Namespace with
-# UIDVALIDITY + folder so (account_id, remote_id) stays unique and fetch_mime
-# can select the right mailbox without defaulting to INBOX.
-_IMAP_REMOTE_SEP = "\x1f"
-
-
-def format_imap_remote_id(folder: str, uidvalidity: int, uid: int) -> str:
-    safe_folder = folder.replace(_IMAP_REMOTE_SEP, " ")
-    return f"{int(uidvalidity)}{_IMAP_REMOTE_SEP}{safe_folder}{_IMAP_REMOTE_SEP}{int(uid)}"
-
-
-def parse_imap_remote_id(remote_id: str) -> tuple[int, str, int] | None:
-    parts = remote_id.split(_IMAP_REMOTE_SEP)
-    if len(parts) != 3:
-        return None
-    try:
-        return int(parts[0]), parts[1], int(parts[2])
-    except ValueError:
-        return None
-
-
-def imap_uid_for_command(remote_id: str) -> str:
-    """Bare UID string for UID FETCH/STORE (strips namespace when present)."""
-    parsed = parse_imap_remote_id(remote_id)
-    return str(parsed[2]) if parsed else str(remote_id)
-
-
-def _uid_sequence_index(sequence_set: str, target_uid: int) -> int | None:
-    offset = 0
-    for part in sequence_set.split(","):
-        if ":" in part:
-            try:
-                first, last = (int(value) for value in part.split(":", 1))
-            except ValueError:
-                return None
-            step = 1 if last >= first else -1
-            count = abs(last - first) + 1
-            distance = (target_uid - first) * step
-            if 0 <= distance < count:
-                return offset + distance
-            offset += count
-        else:
-            try:
-                value = int(part)
-            except ValueError:
-                return None
-            if value == target_uid:
-                return offset
-            offset += 1
-    return None
-
-
-def _uid_sequence_value(sequence_set: str, index: int) -> int | None:
-    offset = 0
-    for part in sequence_set.split(","):
-        if ":" in part:
-            try:
-                first, last = (int(value) for value in part.split(":", 1))
-            except ValueError:
-                return None
-            step = 1 if last >= first else -1
-            count = abs(last - first) + 1
-            if offset <= index < offset + count:
-                return first + step * (index - offset)
-            offset += count
-        else:
-            try:
-                value = int(part)
-            except ValueError:
-                return None
-            if offset == index:
-                return value
-            offset += 1
-    return None
-
-
-def _extract_copyuid_texts(c: imaplib.IMAP4, response_data: Any) -> list[str]:
-    """Extract COPYUID response lines once before client.response() pops untagged responses."""
-    values = list(response_data or [])
-    try:
-        resp = c.response("COPYUID")
-        if isinstance(resp, (tuple, list)) and len(resp) == 2:
-            _, response_values = resp
-            values.extend(response_values or [])
-    except (AttributeError, ValueError, imaplib.IMAP4.error):
-        pass
-    texts: list[str] = []
-    for value in values:
-        text = value.decode("ascii", errors="ignore") if isinstance(value, bytes) else str(value)
-        texts.append(text)
-    return texts
-
-
-def _copyuid_remote_states(
-    copyuid_texts: list[str],
-    source_uids: Sequence[int],
-    dest_folder: str,
-) -> dict[int, dict[str, Any]]:
-    """Build destination identities for multiple source UIDs from pre-extracted COPYUID texts."""
-    results: dict[int, dict[str, Any]] = {
-        u: {"folder_remote_id": dest_folder} for u in source_uids
-    }
-    for text in copyuid_texts:
-        match = re.search(r"(?:\[\s*)?COPYUID\s+(\d+)\s+([0-9,:]+)\s+([0-9,:]+)", text, re.IGNORECASE)
-        if match is None:
-            match = re.fullmatch(r"\s*(\d+)\s+([0-9,:]+)\s+([0-9,:]+)\s*", text)
-        if match is None:
-            continue
-        uidvalidity = int(match.group(1))
-        source_set = match.group(2)
-        destination_set = match.group(3)
-        for u in source_uids:
-            if "remote_id" in results[u]:
-                continue
-            index = _uid_sequence_index(source_set, u)
-            if index is None:
-                continue
-            destination_uid = _uid_sequence_value(destination_set, index)
-            if destination_uid is None:
-                continue
-            results[u]["remote_id"] = format_imap_remote_id(dest_folder, uidvalidity, destination_uid)
-            results[u]["uid"] = destination_uid
-    return results
-
-
-def _copyuid_remote_state(c: imaplib.IMAP4, response_data: Any, source_uid: int, dest_folder: str) -> dict[str, Any]:
-    """Build destination identity from the UIDPLUS COPYUID response when present."""
-    copyuid_texts = _extract_copyuid_texts(c, response_data)
-    mapping = _copyuid_remote_states(copyuid_texts, [source_uid], dest_folder)
-    return mapping[source_uid]
+from mail_core.providers.imap_wire import (
+    _IMAP_REMOTE_SEP,
+    _copyuid_remote_state,
+    _copyuid_remote_states,
+    _extract_copyuid_texts,
+    _get_server_uidvalidity,
+    _parse_fetch_flags,
+    _parse_uids_flags_from_response,
+    _quote_mailbox,
+    _uid_sequence_index,
+    _uid_sequence_value,
+    format_imap_remote_id,
+    imap_uid_for_command,
+    parse_imap_remote_id,
+)
+from mail_core.providers.imap_writeback import execute_imap_writeback_batch
 
 
 def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -> None:
@@ -500,20 +386,6 @@ def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -
             f"UIDVALIDITY changed: was {prev}, now {uidvalidity}",
             status=None,
         )
-
-
-def _quote_mailbox(name: str) -> str:
-    """Safely quote an IMAP mailbox name if it contains spaces or special characters."""
-    if any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in name):
-        raise ValueError("IMAP mailbox name contains control characters")
-    if not name:
-        return '""'
-    if name.startswith('"') and name.endswith('"'):
-        return name
-    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
-    if any(c in name for c in ' ()[]{}\\"%*'):
-        return f'"{escaped}"'
-    return name
 
 
 def _unescape_imap_quoted(text: str) -> str:
@@ -542,21 +414,6 @@ def _is_mailbox_noselect(c: imaplib.IMAP4, folder_remote_id: str) -> bool:
     return False
 
 
-def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
-    if not hasattr(c, "status"):
-        return None
-    try:
-        status = c.status(_quote_mailbox(folder), "(UIDVALIDITY)")
-        if status[0] == "OK" and status[1] and status[1][0]:
-            blob = status[1][0].decode() if isinstance(status[1][0], bytes) else str(status[1][0])
-            m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
-            if m:
-                return int(m.group(1))
-    except Exception:
-        pass
-    return None
-
-
 def _search_uids(data: Any) -> list[int]:
     """Parse UIDs from an IMAP SEARCH response, across *all* data chunks.
 
@@ -580,31 +437,6 @@ def _search_uids(data: Any) -> list[int]:
             except ValueError:
                 continue
     return uids
-
-
-def _parse_fetch_flags(meta: str) -> tuple[bool | None, bool | None]:
-    match = re.search(r"\bFLAGS\s*\(([^)]*)\)", meta, flags=re.IGNORECASE)
-    if match is None:
-        return None, None
-    flags = set(match.group(1).casefold().split())
-    return "\\seen" in flags, "\\flagged" in flags
-
-
-def _parse_uids_flags_from_response(data: Sequence[Any]) -> dict[int, tuple[bool | None, bool | None]]:
-    result: dict[int, tuple[bool | None, bool | None]] = {}
-    for blob in data or ():
-        if blob is None:
-            continue
-        meta_bytes = blob[0] if isinstance(blob, tuple) else blob
-        if not isinstance(meta_bytes, (bytes, str)):
-            continue
-        meta = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
-        m = re.search(r"\bUID\s+(\d+)", meta, flags=re.IGNORECASE)
-        if m:
-            uid = int(m.group(1))
-            is_read, is_flagged = _parse_fetch_flags(meta)
-            result[uid] = (is_read, is_flagged)
-    return result
 
 
 def _uid_from_fetch_blob(flags_blob: tuple[Any, ...]) -> int | None:
@@ -1619,279 +1451,12 @@ class ImapProvider:
     def apply_remote_operations(
         self, operations: Sequence[Any]
     ) -> Sequence[tuple[Any, RemoteOperationResult]]:
-        from mail_core.providers.remote_writeback import (
-            OP_MARK_READ,
-            OP_MOVE,
-            OP_SET_FLAG,
-            OP_TRASH,
-            compress_uids_chunked,
-            normalize_op_type,
-            require_remote_id,
+        """Execute batched remote flag/move/trash operations via imap_writeback."""
+        return execute_imap_writeback_batch(
+            operations,
+            connect_fn=self._connect_with_permit,
+            close_fn=self._close_client,
         )
-
-        if not operations:
-            return []
-
-        results: dict[Any, RemoteOperationResult] = {}
-        valid_ops: list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]] = []
-
-        for item in operations:
-            op_id = item.op_id
-            desired = dict(item.desired_state or {})
-            op_type = normalize_op_type(item.op_type)
-            try:
-                remote_id = require_remote_id(desired)
-            except ValueError as exc:
-                results[op_id] = RemoteOperationResult(success=False, error=str(exc))
-                continue
-
-            parsed = parse_imap_remote_id(remote_id)
-            folder = str(desired.get("folder_remote_id") or (parsed[1] if parsed else "") or "INBOX")
-            if parsed is not None and desired.get("folder_remote_id"):
-                if str(desired["folder_remote_id"]) != parsed[1]:
-                    results[op_id] = RemoteOperationResult(
-                        success=False,
-                        error=f"folder_remote_id {desired['folder_remote_id']!r} does not match remote_id folder {parsed[1]!r}",
-                    )
-                    continue
-
-            uid_str = imap_uid_for_command(remote_id)
-            try:
-                numeric_uid = int(uid_str)
-            except ValueError:
-                results[op_id] = RemoteOperationResult(success=False, error=f"invalid numeric UID {uid_str!r}")
-                continue
-
-            uv = parsed[0] if parsed is not None else None
-            dest_folder: str | None = None
-            try:
-                _quote_mailbox(folder)
-                if op_type == OP_MOVE:
-                    dest = str(desired.get("dest_folder_remote_id") or desired.get("to_folder") or "")
-                    if not dest:
-                        results[op_id] = RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
-                        continue
-                    dest_folder = dest
-                elif op_type == OP_TRASH:
-                    dest_folder = str(desired.get("trash_folder_remote_id") or "Trash")
-                if dest_folder is not None:
-                    _quote_mailbox(dest_folder)
-            except ValueError as exc:
-                results[op_id] = RemoteOperationResult(success=False, error=str(exc))
-                continue
-
-            valid_ops.append((op_id, op_type, desired, numeric_uid, folder, uv, dest_folder))
-
-        if not valid_ops:
-            return [(op.op_id, results.get(op.op_id, RemoteOperationResult(success=False, error="unknown error"))) for op in operations]
-
-        folder_groups: dict[str, list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]]] = {}
-        for entry in valid_ops:
-            folder = entry[4]
-            folder_groups.setdefault(folder, []).append(entry)
-
-        c, _permit = self._connect_with_permit()
-        try:
-            for folder, items in folder_groups.items():
-                try:
-                    typ, _ = c.select(_quote_mailbox(folder))
-                    if typ != "OK":
-                        for it in items:
-                            results[it[0]] = RemoteOperationResult(success=False, error=f"select {folder} failed")
-                        continue
-
-                    srv_uv = _get_server_uidvalidity(c, folder)
-                    valid_folder_items = []
-                    for it in items:
-                        expected_uv = it[5]
-                        if (
-                            expected_uv is not None
-                            and expected_uv > 0
-                            and srv_uv is not None
-                            and srv_uv != expected_uv
-                        ):
-                            results[it[0]] = RemoteOperationResult(
-                                success=False,
-                                error=f"UIDVALIDITY mismatch for {folder}: expected {expected_uv}, got {srv_uv}",
-                            )
-                        else:
-                            valid_folder_items.append(it)
-
-                    if not valid_folder_items:
-                        continue
-
-                    subgroups: dict[tuple[str, Any], list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]]] = {}
-                    for it in valid_folder_items:
-                        op_id, op_type, desired, num_uid, fld, uv, dest_fld = it
-                        if op_type == OP_MARK_READ:
-                            target_val = bool(desired.get("is_read", True))
-                        elif op_type == OP_SET_FLAG:
-                            target_val = bool(desired.get("is_flagged", True))
-                        else:
-                            target_val = dest_fld
-                        subgroups.setdefault((op_type, target_val), []).append(it)
-
-                    for (op_type, target_val), sub_items in subgroups.items():
-                        uid_to_items: dict[int, list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]]] = {}
-                        for it in sub_items:
-                            uid_to_items.setdefault(it[3], []).append(it)
-                        uids = sorted(uid_to_items.keys())
-                        chunks = compress_uids_chunked(uids)
-
-                        for chunk_str, chunk_uids in chunks:
-                            if op_type == OP_MARK_READ:
-                                want_read = bool(target_val)
-                                flag_op = "+FLAGS" if want_read else "-FLAGS"
-                                typ, data = c.uid("STORE", chunk_str, flag_op, r"(\Seen)")
-                                if typ != "OK":
-                                    for u in chunk_uids:
-                                        for it in uid_to_items.get(u, []):
-                                            results[it[0]] = RemoteOperationResult(success=False, error="STORE Seen failed")
-                                    continue
-                                flags_by_uid = _parse_uids_flags_from_response(data)
-                                missing_uids = [u for u in chunk_uids if u not in flags_by_uid]
-                                if missing_uids:
-                                    f_chunks = compress_uids_chunked(missing_uids)
-                                    for fc, _ in f_chunks:
-                                        f_typ, f_data = c.uid("FETCH", fc, "(FLAGS UID)")
-                                        if f_typ == "OK":
-                                            flags_by_uid.update(_parse_uids_flags_from_response(f_data))
-                                for u in chunk_uids:
-                                    associated = uid_to_items.get(u, [])
-                                    if u not in flags_by_uid:
-                                        res = RemoteOperationResult(
-                                            success=False,
-                                            error=f"UID {u} not found in {folder}",
-                                        )
-                                    else:
-                                        is_read, _ = flags_by_uid[u]
-                                        if is_read is want_read:
-                                            res = RemoteOperationResult(
-                                                success=True,
-                                                remote_state={"is_read": want_read},
-                                            )
-                                        else:
-                                            res = RemoteOperationResult(
-                                                success=False,
-                                                error=f"STORE Seen for UID {u} could not be verified via FETCH",
-                                            )
-                                    for it in associated:
-                                        results[it[0]] = res
-
-                            elif op_type == OP_SET_FLAG:
-                                want_flag = bool(target_val)
-                                flag_op = "+FLAGS" if want_flag else "-FLAGS"
-                                typ, data = c.uid("STORE", chunk_str, flag_op, r"(\Flagged)")
-                                if typ != "OK":
-                                    for u in chunk_uids:
-                                        for it in uid_to_items.get(u, []):
-                                            results[it[0]] = RemoteOperationResult(success=False, error="STORE Flagged failed")
-                                    continue
-                                flags_by_uid = _parse_uids_flags_from_response(data)
-                                missing_uids = [u for u in chunk_uids if u not in flags_by_uid]
-                                if missing_uids:
-                                    f_chunks = compress_uids_chunked(missing_uids)
-                                    for fc, _ in f_chunks:
-                                        f_typ, f_data = c.uid("FETCH", fc, "(FLAGS UID)")
-                                        if f_typ == "OK":
-                                            flags_by_uid.update(_parse_uids_flags_from_response(f_data))
-                                for u in chunk_uids:
-                                    associated = uid_to_items.get(u, [])
-                                    if u not in flags_by_uid:
-                                        res = RemoteOperationResult(
-                                            success=False,
-                                            error=f"UID {u} not found in {folder}",
-                                        )
-                                    else:
-                                        _, is_flagged = flags_by_uid[u]
-                                        if is_flagged is want_flag:
-                                            res = RemoteOperationResult(
-                                                success=True,
-                                                remote_state={"is_flagged": want_flag},
-                                            )
-                                        else:
-                                            res = RemoteOperationResult(
-                                                success=False,
-                                                error=f"STORE Flagged for UID {u} could not be verified via FETCH",
-                                            )
-                                    for it in associated:
-                                        results[it[0]] = res
-
-                            elif op_type in (OP_MOVE, OP_TRASH):
-                                dest_target = str(target_val)
-                                # A368: MOVE has no per-UID response, so verify
-                                # existence first; a silent-OK server must not
-                                # let an already-expunged UID report success.
-                                f_typ, f_data = c.uid("FETCH", chunk_str, "(FLAGS UID)")
-                                existing_uids = (
-                                    set(_parse_uids_flags_from_response(f_data))
-                                    if f_typ == "OK"
-                                    else set()
-                                )
-                                missing_uids = [u for u in chunk_uids if u not in existing_uids]
-                                for u in missing_uids:
-                                    for it in uid_to_items.get(u, []):
-                                        results[it[0]] = RemoteOperationResult(
-                                            success=False,
-                                            error=f"UID {u} not found in {folder}",
-                                        )
-                                move_uids = [u for u in chunk_uids if u in existing_uids]
-                                for move_spec, move_chunk_uids in compress_uids_chunked(move_uids):
-                                    typ, response_data = c.uid(
-                                        "MOVE", move_spec, _quote_mailbox(dest_target)
-                                    )
-                                    if typ != "OK":
-                                        for u in move_chunk_uids:
-                                            for it in uid_to_items.get(u, []):
-                                                results[it[0]] = RemoteOperationResult(
-                                                    success=False,
-                                                    error="IMAP server does not support atomic MOVE/delete",
-                                                )
-                                    else:
-                                        copyuid_texts = _extract_copyuid_texts(c, response_data)
-                                        states_by_uid = _copyuid_remote_states(
-                                            copyuid_texts, move_chunk_uids, dest_target
-                                        )
-                                        for u in move_chunk_uids:
-                                            for it in uid_to_items.get(u, []):
-                                                results[it[0]] = RemoteOperationResult(
-                                                    success=True,
-                                                    remote_state=states_by_uid[u],
-                                                )
-                except Exception as exc:
-                    from mail_core.mail.domain.failures import FailureDomain, StructuredFailure
-                    from mail_core.providers.connection_slots import is_capacity_error
-
-                    if is_capacity_error(exc):
-                        raise
-                    failure = StructuredFailure.from_exception(exc)
-                    has_succeeded = any(res.success for res in results.values())
-                    is_transport_or_imap = (
-                        isinstance(exc, (TimeoutError, ConnectionError, OSError, ssl.SSLError, imaplib.IMAP4.error))
-                        or failure.domain is not FailureDomain.UNKNOWN
-                    )
-                    if not has_succeeded and is_transport_or_imap:
-                        raise
-                    err_text = failure.format()
-                    for it in items:
-                        if it[0] not in results:
-                            results[it[0]] = RemoteOperationResult(
-                                success=False,
-                                error=err_text,
-                                failure=failure,
-                            )
-        finally:
-            self._close_client(c, _permit)
-
-        return [
-            (
-                op.op_id,
-                results.get(
-                    op.op_id, RemoteOperationResult(success=False, error="operation unhandled")
-                ),
-            )
-            for op in operations
-        ]
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
         from mail_core.providers.base import RemoteOperationItem
@@ -1963,41 +1528,57 @@ class ImapProvider:
         """
         client = self._connect()
         try:
-            capabilities = {str(cap).upper() for cap in (client.capabilities or ())}
-            try:
-                typ, cap_data = client.capability()
-                if typ == "OK" and cap_data and cap_data[0]:
-                    raw = cap_data[0]
-                    text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                    capabilities |= {token.upper() for token in text.split()}
-            except Exception:
-                pass
-            if "IDLE" not in capabilities:
-                raise IdleNotSupportedError("server does not advertise IDLE")
-            typ, _ = client.select(_quote_mailbox(folder_remote_id), readonly=True)
-            if typ != "OK":
-                raise IdleNotSupportedError(f"SELECT {folder_remote_id} failed: {typ}")
-            sock = getattr(client, "sock", None)
-            if sock is not None:
-                # The reader thread blocks indefinitely; a finite socket
-                # timeout would poison the buffered reader (t061 spike).
-                sock.settimeout(None)
+            _open_idle_mailbox(client, folder_remote_id)
         except BaseException as exc:
-            if isinstance(exc, Exception):
-                from mail_core.providers.connection_slots import is_capacity_error
-
-                if not is_capacity_error(exc):
-                    from mail_core.mail.domain.failures import FailurePhase, attach_failure_phase
-
-                    attach_failure_phase(exc, FailurePhase.IMAP)
-            sock = getattr(client, "sock", None)
-            if sock is not None:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
+            _cleanup_failed_idle_client(client, exc)
             raise
         return ImapIdleSession(client)
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=120, reason="imap default")
+
+
+def _collect_imap_capabilities(client: Any) -> set[str]:
+    """Collect server capabilities from handshake and explicit CAPABILITY response."""
+    capabilities = {str(cap).upper() for cap in (client.capabilities or ())}
+    try:
+        typ, cap_data = client.capability()
+        if typ == "OK" and cap_data and cap_data[0]:
+            raw = cap_data[0]
+            text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+            capabilities |= {token.upper() for token in text.split()}
+    except Exception:
+        pass
+    return capabilities
+
+
+def _open_idle_mailbox(client: Any, folder_remote_id: str) -> None:
+    """Validate IDLE capability, SELECT mailbox read-only, and clear socket timeout."""
+    capabilities = _collect_imap_capabilities(client)
+    if "IDLE" not in capabilities:
+        raise IdleNotSupportedError("server does not advertise IDLE")
+    typ, _ = client.select(_quote_mailbox(folder_remote_id), readonly=True)
+    if typ != "OK":
+        raise IdleNotSupportedError(f"SELECT {folder_remote_id} failed: {typ}")
+    sock = getattr(client, "sock", None)
+    if sock is not None:
+        # The reader thread blocks indefinitely; a finite socket
+        # timeout would poison the buffered reader (t061 spike).
+        sock.settimeout(None)
+
+
+def _cleanup_failed_idle_client(client: Any, exc: BaseException) -> None:
+    """Attach FailurePhase.IMAP to non-capacity exceptions and close any open socket."""
+    if isinstance(exc, Exception):
+        from mail_core.providers.connection_slots import is_capacity_error
+
+        if not is_capacity_error(exc):
+            from mail_core.mail.domain.failures import FailurePhase, attach_failure_phase
+
+            attach_failure_phase(exc, FailurePhase.IMAP)
+    sock = getattr(client, "sock", None)
+    if sock is not None:
+        try:
+            sock.close()
+        except Exception:
+            pass
