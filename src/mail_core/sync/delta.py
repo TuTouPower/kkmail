@@ -19,11 +19,17 @@ from mail_core.mail.domain.enums import (
     JobType,
     OutboxEventType,
     SyncPhase,
-    SyncStatus,
     normalize_execution_origin,
 )
-from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
-from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
+from mail_core.mail.domain.folder_views import CONTAINER, folder_sync_skip_reason
+from mail_core.mail.storage.models import (
+    Account,
+    Folder,
+    Message,
+    MessageLocation,
+    OutboxEvent,
+    SyncCheckpoint,
+)
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
@@ -375,8 +381,9 @@ def sync_folder_delta(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
-        if is_view_folder(folder) or folder.sync_status == SyncStatus.PAUSED.value:
-            return {"status": "skipped", "reason": "folder_not_selectable"}
+        skip_reason = folder_sync_skip_reason(folder)
+        if skip_reason is not None:
+            return {"status": "skipped", "reason": skip_reason}
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         if cp is None or not cp.full_scan_complete:
             # Delta needs a completed baseline (design §5.3): bind the

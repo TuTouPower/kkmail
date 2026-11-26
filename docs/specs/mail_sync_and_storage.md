@@ -1,7 +1,7 @@
 ---
 slug: mail_sync_and_storage
 status: active
-tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090, t091]
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090, t091, t092]
 ---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
@@ -18,8 +18,8 @@ ______________________________________________________________________
 - **连接与安全性**：统一由 `src/mail_core/net/` 原语建连（覆盖短连接同步、`open_idle_session` 与 OAuth HTTP 客户端策略解析），强制开启 TLS 证书与主机名 SNI 校验，直连实施 Pin-IP SSRF 防护（禁用事后 `getpeername()` 校验），支持 HTTP/HTTPS `CONNECT` 与 SOCKS5/SOCKS5h 代理隧道；连接预算分离为有界 `connect_timeout`（默认 10s，单 IP 尝试上限 5s）与建连/TLS 握手完成后的 `io_timeout`（默认 60s），双栈建连按 IPv4 优先尝试并保留 `TimeoutError` / 远端拒绝语义不被本地 IPv6 `ENETUNREACH` 掩盖；mailbox 文件夹包含空格或特殊字符时自动带双引号转义。
 - **目录发现与 RFC 6154 属性映射**：
     - 标准角色映射：`\Sent` / 已发送 映射为 `sent`；`Deleted Messages` / `\Trash` 映射为 `trash`；`\Drafts` 映射为 `drafts`；`\All` 映射为 `all`；`\Flagged` / `\Starred` 映射为 `flagged`；
-    - 结构节点处理：带有 `\NoSelect` 属性的目录作为 `paused` 结构节点保留，用于树形层级展示，系统不为其排发邮件同步作业；
-    - Gmail 虚拟标签优化：针对 `@gmail.com` 及 `@googlemail.com` 账号，其 `\All`（所有邮件）与 `\Important`（重要）标签默认置为 `paused`，消除邮件 2~3 倍重复拉取的存储与 I/O 冗余；针对这些 `paused` 视图发起的显式同步请求在服务端自动归零并以 200 成功响应。
+    - 正交状态与结构节点处理：`folders` 以 `kind`（`container` / `view`）、`selectable`（`bool`）与 `remote_state`（`active` / `missing`）正交建模（`t092` 移除过载 `sync_status`）；带有 `\NoSelect` 属性的目录以 `selectable=false` 结构节点保留并继续处于 `remote_state="active"`，仅用于树形层级展示而不排发邮件同步作业；远端不再返回的 `container` 与 `view` 统一收敛为 `remote_state="missing"` 并发射 `folder_deleted`，当且仅当同账号存在唯一缺失旧行与唯一新增远端同系统角色（`sent` / `drafts` / `trash` / `junk` / `archive` / `all` / `flagged` / `important`，优先匹配当前刚消失的 `active` 行）时执行 1-to-1 原位换绑，保留 `Folder.id`、位置关联与同步基线并同步重写物理容器的 `Message.remote_id` 内嵌目录路径与在途 `RemoteOperation`；
+    - Gmail 虚拟标签与角色识别：`ImapProvider` 支持 RFC 6154 `\All` / `\Flagged` / `\Important` 分别映射为 `all` / `flagged` / `important`，已知角色匹配剥离 `[Gmail]/` 前缀；针对 `@gmail.com` / `@googlemail.com` 账号，其 `\All` 与 `\Important` 虚拟汇总标签建模为 `kind="view"` 的只读派生视图（计数与列表由物理目录 `message_locations` / `X-GM-LABELS` 投影），不入同步队列，针对视图的显式同步请求不拉取邮件、由投影收敛。
 - **分批拉取与瞬态网络重试**：
     - 单次元数据同步任务最大拉取批次限制为 10 页（约 500 封），避免长时间霸占 Worker 队列；
     - 遇到 `TimeoutError`、`SSLEOFError` 等网络瞬态故障时采用指数退避重试，未达重试上限不污染账号为 `failed` 状态。
@@ -106,7 +106,7 @@ ______________________________________________________________________
 ## 七、 收件箱定时轮询调度与增量正文自动存库 (t057)
 
 1. **Worker 周期错峰巡检调度**：
-    - Worker 主循环定期执行巡检，对所有启用账号的有效收件箱（`role="inbox"` 且非 paused），按设定期限（默认 1200 秒 / 20 分钟，环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S`）检查超期状态；
+    - Worker 主循环定期执行巡检，对所有启用账号的有效收件箱（`role="inbox"`、`kind="container"`、`selectable=True`、`remote_state="active"`），按设定期限（默认 1200 秒 / 20 分钟，环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S`）检查超期状态；
     - 超期且无在途任务者自动入队 `SYNC_FOLDER_DELTA`，多任务按轮询周期均匀错峰排期（`run_after` 分散），杜绝单点易断的尾递归自调度与瞬时雷暴。
 2. **增量收信连带全文存库**：
     - 增量同步拉取新邮件入库后（`upserted > 0`），自动在同事务中入队 `ARCHIVE_MIME_BATCH`；
@@ -118,10 +118,10 @@ ______________________________________________________________________
 
 1. **IDLE 唤醒通道**：
     - 每账号至多一条 IDLE 长连接、只 SELECT 收件箱、仅对已完成基线的文件夹建立；服务器未在 CAPABILITY 宣告 IDLE 时不发 IDLE，该账号保持轮询；
-    - IDLE 收到变化通知后仅入队 `SYNC_FOLDER_DELTA`（既有去重键 `delta:{account_id}:{folder_id}`），不直接读写邮件数据、不绕基线门禁 / 租约 / fencing；每次会话成功建立（首连、断线重连、凭据或席位重建）后先入队一次同去重键的收件箱补偿 delta，覆盖无活动会话窗口内到达的邮件，已存在 pending / claimed 任务时合并；补偿入队失败按有界退避重试，预算耗尽则释放 IDLE 席位让 t057 轮询兜底并在下次重连继续补偿，不终止监听、不把账号标记 failed，不具备 IDLE 能力或永久认证失败的账号不补偿并保持轮询；连接在 28 分钟内主动 DONE 重入，断线按指数退避（基数与上限可配）加抖动重连；账号禁用、凭据变更（指纹变化）或收件箱 paused 时立即关闭对应会话；
+    - IDLE 收到变化通知后仅入队 `SYNC_FOLDER_DELTA`（既有去重键 `delta:{account_id}:{folder_id}`），不直接读写邮件数据、不绕基线门禁 / 租约 / fencing；每次会话成功建立（首连、断线重连、凭据或席位重建）后先入队一次同去重键的收件箱补偿 delta，覆盖无活动会话窗口内到达的邮件，已存在 pending / claimed 任务时合并；补偿入队失败按有界退避重试，预算耗尽则释放 IDLE 席位让 t057 轮询兜底并在下次重连继续补偿，不终止监听、不把账号标记 failed，不具备 IDLE 能力或永久认证失败的账号不补偿并保持轮询；连接在 28 分钟内主动 DONE 重入，断线按指数退避（基数与上限可配）加抖动重连；账号禁用、凭据变更（指纹变化）或收件箱失去同步资格（`selectable=False` 或 `remote_state!="active"`）时立即关闭对应会话；
     - IDLE 长连接使用独立配额（默认 32），不占用 `connection_slots` 任务槽位；持有 IDLE 的账号跳过收件箱周期轮询，让位后恢复。配额席位只按邮件数据排序（2026-10-28 用户拍板，取代原检查点活动时间口径）：主序为账号收件箱内现存邮件的服务器到达时间最大值（IMAP INTERNALDATE，即 `Message.sort_time`，非发件人 Date 头）倒序；收件箱为空的账号整体排在所有非空账号之后，组内依次按其他文件夹邮件到达时间最大值倒序、账号 `created_at` 倒序、账号 id 升序定序。滞回只在同组内按可比到达键生效：挑战者须比最弱在位者新出滞回窗（默认 300 秒）才换人，无可比键时不换人（稳定序），跨组顶替不受滞回保护。
 2. **全文件夹 STATUS 巡检与状态隔离 (A14)**：
-    - 覆盖全部非收件箱、非 paused、`sync_enabled` 账号的文件夹；探测为短连接 STATUS（IMAP）或文件夹计数读取（Graph），不做全量 metadata 扫描；
+    - 覆盖全部非收件箱、可同步物理目录（`kind="container"`、`selectable=True`、`remote_state="active"`、`sync_enabled` 账号）；探测为短连接 STATUS（IMAP）或文件夹计数读取（Graph），不做全量 metadata 扫描；
     - 基线快照与巡检状态存入独立 `FolderPatrolStatus`（`folder_patrol_status` 表，含 `last_status` / `last_probe_at` / `last_probe_failures`），与 `SyncCheckpoint.cursor` 协议同步游标彻底解耦；随文件夹级联删除；
     - 变化判定仅比较基线与探测双方均有值的维度（服务商缺 UIDNEXT 时以总数 / 未读组合判定）；无任何可解析条目的探测按失败处理，不按无变化放行；无变化零入队，变化入队 delta（`priority = 75`）；未基线（`full_scan_complete != True`）文件夹仅记录基线不入队；单夹探测失败隔离并下轮重试；与 IDLE / 轮询的入队共享同一 delta 去重键，收敛幂等。
 
@@ -214,7 +214,7 @@ ______________________________________________________________________
 ## 十五、 收件箱独立优先结算与后台目录发现解耦契约 (A21)
 
 1. **主请求与收件箱优先结算**：
-    - 针对账号、分组或全局视图发起的增量刷新（`mode="delta"`）且未指定单文件夹时，若目标账号已建立有效且非 paused 的收件箱（`role="inbox"`），主 `SyncRequest` 目标直接解析为该收件箱文件夹，入队前台高优先级任务（已有基线为 `SYNC_FOLDER_DELTA`，无基线为 `SYNC_FOLDER_METADATA`，`priority=20`）；
+    - 针对账号、分组或全局视图发起的增量刷新（`mode="delta"`）且未指定单文件夹时，若目标账号已建立有效且可同步收件箱（`role="inbox"`、`kind="container"`、`selectable=True`、`remote_state="active"`），主 `SyncRequest` 目标直接解析为该收件箱文件夹，入队前台高优先级任务（已有基线为 `SYNC_FOLDER_DELTA`，无基线为 `SYNC_FOLDER_METADATA`，`priority=20`）；
     - 主同步请求严格仅以收件箱同步任务的完成或失败作为自身进入终态（`complete` / `failed`）的判定依据，将收件箱就绪状态与列表可用性解耦出来，彻底消除等待全量次要文件夹串行排队的空转延迟。
 2. **后台全目录发现与兄弟文件夹拓扑解耦**：
     - 伴随收件箱主请求的生成，系统自动在同事务中派发关联的后台同步请求（`SyncRequest(mode="delta", scope={"background": True, "parent_request_id": str(request_id), ...})`）；

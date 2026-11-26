@@ -208,7 +208,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         }
         const targetFolders = folderId
           ? stats.folders.filter((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
-          : stats.folders.filter((f: AccountFolderStatsItemOut) => f.role === folderRole)
+          : stats.folders.filter((f: AccountFolderStatsItemOut) => f.role === folderRole && f.selectable !== false)
         return {
           total: targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.total_count)) : 0,
           unread: targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.unread_count)) : 0,
@@ -235,7 +235,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           unreadUnknown = true
           continue
         }
-        const targetFolders = s.folders.filter((f: AccountFolderStatsItemOut) => f.role === folderRole)
+        const targetFolders = s.folders.filter((f: AccountFolderStatsItemOut) => f.role === folderRole && f.selectable !== false)
         const accountTotal = targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.total_count)) : 0
         const accountUnread = targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.unread_count)) : 0
         if (accountTotal === null) totalUnknown = true

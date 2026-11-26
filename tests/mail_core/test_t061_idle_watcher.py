@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState, JobStatus, JobType
 from mail_core.mail.storage.models import (
     Account,
     Folder,
@@ -299,7 +299,7 @@ def _seed_idle_account(
         remote_id="INBOX",
         name="Inbox",
         role="inbox",
-        sync_status=SyncStatus.PAUSED.value if paused else SyncStatus.IDLE.value,
+        remote_state=FolderRemoteState.MISSING.value if paused else FolderRemoteState.ACTIVE.value,
     )
     session.add(folder)
     session.flush()
@@ -576,7 +576,7 @@ def test_blocked_watch_deregisters_and_retries_after_expiry():
         remote_id="INBOX",
         name="Inbox",
         role="inbox",
-        sync_status=SyncStatus.IDLE.value,
+        remote_state=FolderRemoteState.ACTIVE.value,
     )
     candidate = IdleCandidate(
         account_id=acc_id,
@@ -638,7 +638,7 @@ def test_register_blocked_stale_thread_cannot_clobber_new_watch():
     )
     folder = Folder(
         id=folder_id, account_id=acc_id, remote_id="INBOX", name="Inbox",
-        role="inbox", sync_status=SyncStatus.IDLE.value,
+        role="inbox", remote_state=FolderRemoteState.ACTIVE.value,
     )
     manager = IdleWatcherManager(
         lambda: _FakeDbSession(account, folder),
@@ -682,7 +682,7 @@ def test_reconcile_sweeps_blocked_state_for_departed_accounts():
     )
     folder = Folder(
         id=uuid.uuid4(), account_id=acc_id, remote_id="INBOX", name="Inbox",
-        role="inbox", sync_status=SyncStatus.IDLE.value,
+        role="inbox", remote_state=FolderRemoteState.ACTIVE.value,
     )
     manager = IdleWatcherManager(
         lambda: _FakeDbSession(account, folder),
@@ -1352,14 +1352,14 @@ def test_ac006_paused_inbox_closes_session_and_disable_recovers():
         assert _wait_until(lambda: manager.held_account_ids() == {acc_id})
         with Session() as session:
             row = session.get(Folder, folder_id)
-            row.sync_status = SyncStatus.PAUSED.value
+            row.remote_state = FolderRemoteState.MISSING.value
             session.commit()
         assert _wait_until(lambda: fake.closed is True)
         assert manager.held_account_ids() == set()
 
         with Session() as session:
             row = session.get(Folder, folder_id)
-            row.sync_status = SyncStatus.IDLE.value
+            row.remote_state = FolderRemoteState.ACTIVE.value
             acc_row = session.get(Account, acc_id)
             acc_row.sync_enabled = False
             session.commit()

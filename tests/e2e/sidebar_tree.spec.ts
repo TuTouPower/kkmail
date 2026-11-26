@@ -624,4 +624,47 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await page.keyboard.press('Space')
     expect(await allAccountsBtn.getAttribute('aria-expanded')).toBe('false')
   })
+
+  test('t092: Gmail [Gmail] 扁平化、不可选目录禁用且无未知角标、同角色活跃目录消歧', async ({ page }) => {
+    const customAccounts = [
+      { id: 'acc-1', email: 'gmail@gmail.com', provider: 'imap', account_type: 'imap', sync_enabled: true },
+      { id: 'acc-2', email: 'dual@example.com', provider: 'imap', account_type: 'imap', sync_enabled: true },
+    ]
+    const customStats = {
+      'acc-1': [
+        { folder_id: 'g-inbox', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', kind: 'container' as const, selectable: true, unread_count: 1, total_count: 3, parent_remote_id: null },
+        { folder_id: 'g-root', remote_id: '[Gmail]', name: '[Gmail]', role: 'other', kind: 'container' as const, selectable: false, unread_count: null, total_count: null, parent_remote_id: null },
+        { folder_id: 'g-imp', remote_id: '[Gmail]/Important', name: '[Gmail]/Important', role: 'important', kind: 'view' as const, selectable: true, unread_count: 1, total_count: 4, parent_remote_id: '[Gmail]' },
+        { folder_id: 'g-all', remote_id: '[Gmail]/All Mail', name: '[Gmail]/All Mail', role: 'all', kind: 'view' as const, selectable: true, unread_count: 2, total_count: 10, parent_remote_id: '[Gmail]' },
+        { folder_id: 'g-client', remote_id: '[Gmail]/重要客户', name: '[Gmail]/重要客户', role: 'other', kind: 'container' as const, selectable: true, unread_count: 0, total_count: 2, parent_remote_id: '[Gmail]' },
+        { folder_id: 'arch-parent', remote_id: 'ArchiveParent', name: 'ArchiveParent', role: 'archive', kind: 'container' as const, selectable: false, unread_count: null, total_count: null, parent_remote_id: null },
+      ],
+      'acc-2': [
+        { folder_id: 'i-1', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', kind: 'container' as const, selectable: true, unread_count: 1, total_count: 3, parent_remote_id: null },
+        { folder_id: 'i-2', remote_id: 'AltInbox', name: 'AltInbox', role: 'inbox', kind: 'container' as const, selectable: true, unread_count: 0, total_count: 2, parent_remote_id: null },
+      ],
+    }
+
+    await setupStubApi(page, { authedInitially: true, accounts: customAccounts, folderStatsByAccount: customStats })
+    await page.goto('/')
+
+    const acc1Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'gmail@gmail.com' })
+    const acc2Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'dual@example.com' })
+    await expect(acc1Row).toBeVisible({ timeout: 10000 })
+
+    await acc1Row.locator('.tree-disclosure').click()
+    await acc2Row.locator('.tree-disclosure').click()
+
+    await expect(acc1Row.locator('.tree-label', { hasText: /^重要邮件$/ })).toBeVisible()
+    await expect(acc1Row.locator('.tree-label', { hasText: /^所有邮件$/ })).toBeVisible()
+    await expect(acc1Row.locator('.tree-label', { hasText: /^重要客户$/ })).toBeVisible()
+    await expect(acc1Row.locator('.tree-label', { hasText: '[Gmail]' })).toHaveCount(0)
+
+    const nonSelectableArchive = acc1Row.locator('.tree-folder-row', { hasText: '归档' })
+    await expect(nonSelectableArchive).toBeDisabled()
+    await expect(nonSelectableArchive.locator('.unread-badge-unknown')).toHaveCount(0)
+
+    await expect(acc2Row.locator('.tree-label', { hasText: /^收件箱 · INBOX$/ })).toBeVisible()
+    await expect(acc2Row.locator('.tree-label', { hasText: /^收件箱 · AltInbox$/ })).toBeVisible()
+  })
 })

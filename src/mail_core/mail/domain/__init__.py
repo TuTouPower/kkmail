@@ -3,6 +3,7 @@ from mail_core.mail.domain.enums import (
     ArchiveState,
     ConnectivityState,
     CredentialState,
+    FolderRemoteState,
     FolderRole,
     JobStatus,
     JobType,
@@ -12,13 +13,13 @@ from mail_core.mail.domain.enums import (
     SyncActivity,
     SyncPhase,
     SyncRunStatus,
-    SyncStatus,
 )
 __all__ = [
     "ARCHIVE_TRANSITIONS",
     "ArchiveState",
     "ConnectivityState",
     "CredentialState",
+    "FolderRemoteState",
     "FolderRole",
     "IllegalArchiveTransition",
     "JobStatus",
@@ -29,7 +30,6 @@ __all__ = [
     "SyncActivity",
     "SyncPhase",
     "SyncRunStatus",
-    "SyncStatus",
     "assert_transition",
     "can_transition",
 ]

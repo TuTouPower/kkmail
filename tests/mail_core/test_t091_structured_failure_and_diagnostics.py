@@ -37,7 +37,7 @@ from mail_core.mail.domain.enums import (
     JobStatus,
     JobType,
     RemoteOperationStatus,
-    SyncStatus,
+    FolderRemoteState,
 )
 from mail_core.mail.domain.failures import (
     FailureDomain,
@@ -373,7 +373,7 @@ def test_t091_pg_worker_log_job_health_and_api_preserve_structured_diagnostics(m
             remote_id="INBOX",
             name="INBOX",
             role="inbox",
-            sync_status=SyncStatus.IDLE.value,
+            remote_state=FolderRemoteState.ACTIVE.value,
         )
         session.add(inbox)
         session.flush()

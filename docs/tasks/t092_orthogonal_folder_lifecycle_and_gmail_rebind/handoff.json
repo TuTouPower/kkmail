@@ -1,0 +1,17 @@
+{
+  "tid": "t092",
+  "attempt": 1,
+  "execution_id": "75618b62ef974e8ea8387357a30af919",
+  "status": "done",
+  "branch": "t092_orthogonal_folder_lifecycle_and_gmail_rebind",
+  "base_sha": "71585e7b130e65f9d00fa5f5948692b0b52901ef",
+  "spec_source_sha": "71585e7b130e65f9d00fa5f5948692b0b52901ef",
+  "tests": "后端全量 PostgreSQL 套 `./scripts/run-mail-core-tests.sh run` 2282 passed, 2 skipped（coverage 86%）；前端 Vitest 56 files / 599 passed + `openapi:check` + `css:check`（9 + 2 node tests），`tsc -b`、`vite build` 与 `oxlint --deny-warnings`（121 files, 0 warnings, 0 errors）通过；桌面端 `npm test` 12 项脚本通过；模板契约 `.repo_template/tests` 389 passed, 1 skipped；`export_openapi.py --check`（46 paths）、`check_doc_sensitive.py`（36 files）、`check_dep_locks.py --check` 与 `git diff --check` 全通过。",
+  "blackbox": "全量 Playwright E2E `npm --prefix src/frontend run test:e2e` 26 passed（含 `sidebar_tree.spec.ts` 新增 Gmail `[Gmail]` 扁平化、不可选目录禁点无未知角标与同角色多活跃目录消歧用例）。",
+  "review": "Code Review Round 3 `verdict: PASS`（`reviewed_scope: 359e82c02f56729d`，Round 2 3 项全已修，1 项非阻断 minor `t092_code_f012` 转 `p101`）；Test Review Round 2 `verdict: PASS`（`reviewed_scope: 359e82c02f56729d`，Round 1 5 项全消除，0 新 finding）。AC-001~AC-006 全部 `TICK-VALID`。",
+  "review_scope": "359e82c02f56729d",
+  "pending": [
+    "p101"
+  ],
+  "findings": []
+}

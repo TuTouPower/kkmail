@@ -1298,3 +1298,22 @@ it('shows unknown search unread count when any loaded result has unknown read st
   await waitFor(() => expect(subjects(container)).toEqual(['Subject unread', 'Subject unknown']))
   expect(container.querySelector('.list-count')?.textContent).toBe('2 封邮件 · — 封未读')
 })
+
+it('t092: excludes selectable=false folders when summarizing folderRole header stats', async () => {
+  const fallback = globalThis.fetch
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const u = String(url)
+    if (u.includes('/folder-stats')) {
+      return json({
+        folders: [
+          { folder_id: 'sent-parent', role: 'sent', kind: 'container', selectable: false, total_count: null, unread_count: null },
+          { folder_id: 'sent-leaf', role: 'sent', kind: 'container', selectable: true, total_count: 4, unread_count: 1 },
+        ],
+      })
+    }
+    return fallback(url, init)
+  }))
+  useMailStore.setState({ view: { type: 'favorite', accountId: 'acc-1', email: 'box@x.test', category: 'sent' } })
+  const { container } = await render(<MessageList />)
+  await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('4 封邮件 · 1 封未读'))
+})

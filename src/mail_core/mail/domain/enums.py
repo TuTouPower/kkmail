@@ -17,23 +17,21 @@ class FolderRole(StrEnum):
     TRASH = "trash"
     JUNK = "junk"
     ARCHIVE = "archive"
+    FLAGGED = "flagged"
     ALL = "all"
+    IMPORTANT = "important"
     OTHER = "other"
 
 
-class SyncStatus(StrEnum):
-    """Folder-level selectability/pause state (NOT account health).
+class FolderRemoteState(StrEnum):
+    """Whether a folder was observed in the latest successful remote discovery.
 
-    Account health is modelled orthogonally by ``CredentialState``,
-    ``ConnectivityState`` and ``SyncActivity``.  ``SyncStatus`` is retained
-    exclusively for ``folders.sync_status``.
+    Orthogonal to ``Folder.kind`` (``container`` / ``view``) and protocol
+    ``Folder.selectable`` (``\\Noselect`` containers vs selectable folders).
     """
 
-    IDLE = "idle"
-    RUNNING = "running"
-    PAUSED = "paused"
-    FAILED = "failed"
-    AUTH_FAILED = "auth_failed"
+    ACTIVE = "active"
+    MISSING = "missing"
 
 
 class CredentialState(StrEnum):

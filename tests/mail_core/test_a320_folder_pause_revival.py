@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState
 from mail_core.mail.storage.models import Account, Folder
 from mail_core.providers.base import RemoteFolder
 from mail_core.sync import engine
@@ -107,28 +107,31 @@ def _existing(account_id, remote_id, status):
         remote_id=remote_id,
         name=remote_id,
         role="inbox" if remote_id == "INBOX" else "other",
-        sync_status=status,
+        remote_state=status,
     )
 
 
 def test_paused_folder_revives_when_selectable_again(monkeypatch):
     account = _account()
-    existing = _existing(account.id, "INBOX", SyncStatus.PAUSED.value)
+    existing = _existing(account.id, "INBOX", FolderRemoteState.MISSING.value)
     remote = [RemoteFolder("INBOX", "INBOX", role="inbox", selectable=True)]
     harness = _Harness(account, [existing], remote)
     result = _run(monkeypatch, harness)
     assert result["status"] == "ok"
-    assert existing.sync_status == SyncStatus.IDLE.value
+    assert existing.remote_state == FolderRemoteState.ACTIVE.value
     enqueued_ids = {str(j["payload"]["folder_id"]) for j in harness.enqueued}
     assert str(existing.id) in enqueued_ids
 
 
+# t092: 不可选远端目录在存在期间收敛为 selectable=False, remote_state="active"
+# （"不可选" 与 "远端消失" 已解耦，旧 stays_paused 断言整体重写为正交状态断言）。
 def test_paused_folder_stays_paused_when_still_not_selectable(monkeypatch):
     account = _account()
-    existing = _existing(account.id, "Archive", SyncStatus.PAUSED.value)
+    existing = _existing(account.id, "Archive", FolderRemoteState.MISSING.value)
     remote = [RemoteFolder("Archive", "Archive", role="other", selectable=False)]
     harness = _Harness(account, [existing], remote)
     result = _run(monkeypatch, harness)
     assert result["status"] == "ok"
-    assert existing.sync_status == SyncStatus.PAUSED.value
+    assert existing.selectable is False
+    assert existing.remote_state == FolderRemoteState.ACTIVE.value
     assert harness.enqueued == []

@@ -217,17 +217,16 @@ def messages_upserted_event(account_id: uuid.UUID, folder_id: uuid.UUID, ids: li
 
 
 def _label_view_folders(session: Session, account_id: uuid.UUID) -> dict[str, uuid.UUID]:
-    from mail_core.mail.domain.folder_views import VIEW
+    from mail_core.mail.domain.folder_views import VIEW, is_important_view
+    from mail_core.mail.storage.models import active_folder_clause
 
     mapping: dict[str, uuid.UUID] = {}
     for folder in session.scalars(
-        select(Folder).where(Folder.account_id == account_id, Folder.kind == VIEW)
+        select(Folder)
+        .where(Folder.account_id == account_id, Folder.kind == VIEW, active_folder_clause())
+        .order_by(Folder.id.asc())
     ):
-        if folder.role == "important" or folder.remote_id in (
-            "[Gmail]/Important",
-            "[Gmail]/重要",
-            "[Gmail]/&kc2JgQ-",
-        ):
+        if is_important_view(folder):
             mapping["\\Important"] = folder.id
     return mapping
 

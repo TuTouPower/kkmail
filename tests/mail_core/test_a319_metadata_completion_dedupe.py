@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from mail_core.mail.domain.enums import JobType, SyncStatus
+from mail_core.mail.domain.enums import FolderRemoteState, JobType
 from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint
 from mail_core.sync import engine
 
@@ -67,7 +67,8 @@ def test_metadata_completion_enqueues_carry_dedupe_keys(monkeypatch):
     folder = SimpleNamespace(
         id=folder_id,
         remote_id="INBOX",
-        sync_status=SyncStatus.IDLE.value,
+        selectable=True,
+        remote_state=FolderRemoteState.ACTIVE.value,
     )
     harness = _Harness(account, folder)
 

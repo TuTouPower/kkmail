@@ -37,7 +37,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 - **统一出站传输与协议适配 (`src/mail_core/net/`, `src/mail_core/sync/`, `src/mail_core/providers/`)**：
 
     - 出站传输层 (`src/mail_core/net/`, t089)：集中提供代理策略解析（`MAIL_CORE_OUTBOUND_PROXY` / `MAIL_CORE_NO_PROXY`、`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` 及账号级 `outbound_proxy` / `proxy_mode` 覆盖）、HTTP/HTTPS `CONNECT` 与 SOCKS5/SOCKS5h 隧道握手、直连 Pin-IP SSRF 防护（消除构建期 DNS TOCTOU 与建连后 `getpeername()` 检查，受信任回环/私网代理端点不被误拦；远程图片代理 `remote_image_proxy.py` 复用直连双栈原语并维持强制禁代理契约）、两段式超时控制（建连总预算默认 10s / 单尝试 5s 与握手后 I/O 超时 60s 分离，IPv4 优先且保留远端 `TimeoutError` 不被本地 `ENETUNREACH` 掩盖）及共享 `EndpointBulkhead` 端点负缓存熔断隔离（冷却期内快速失败且在持槽前拒绝或即时释放 `ConnectionPermit`，防止单一受阻域名拖垮全局 8 槽池）。
-    - 适配器：IMAP（同步、`open_idle_session` 与批操作统一通过 `DialedIMAP4` / `DialedIMAP4_SSL` 走出站建连原语，带 TLS SNI 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务；Gmail 账号下 `\All` 与 `\Important` 等虚拟全量标签建模为 `kind=view` 的派生只读视图，不进入同步队列；常规 FETCH 携带 `X-GM-LABELS`，标签成员落为 `message_locations`，视图计数与列表由物理目录位置投影得到（t086）；RFC 6154 支持 `\All` 映射为 `all` 与 `\Flagged` 映射为 `flagged`）、Microsoft Graph v1.0（复用同一显式代理策略解析器，well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放）。
+    - 适配器：IMAP（同步、`open_idle_session` 与批操作统一通过 `DialedIMAP4` / `DialedIMAP4_SSL` 走出站建连原语，带 TLS SNI 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为 `selectable=false` 的树节点且不排邮件同步任务；Gmail 账号下 `\All` 与 `\Important` 等虚拟全量标签建模为 `kind=view` 的派生只读视图，不进入同步队列；常规 FETCH 携带 `X-GM-LABELS`，标签成员落为 `message_locations`，视图计数与列表由物理目录位置投影得到（t086）；RFC 6154 支持 `\All` / `\Flagged` / `\Important` 分别映射为 `all` / `flagged` / `important`，已知角色匹配剥离 `[Gmail]/` 前缀；目录生命周期拆分为正交的 `kind` / `selectable` / `remote_state`，支持账号切语言等场景下单一系统角色的 1-to-1 原位重绑并统一收敛缺失 `container`/`view` 为 `remote_state='missing'`，t092）、Microsoft Graph v1.0（复用同一显式代理策略解析器，well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放）。
     - 并发保护与容错：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token；Worker 捕获瞬态网络超时（`TimeoutError`、`SSLEOFError` 等）进行指数退避重试，未达重试上限时不污染账户为 `failed` 状态。
     - 同步分批：`sync_folder_metadata` 默认单任务最大页数控制在 10 页（约 500 封），避免大目录单次长时间霸占连接与 Worker 队列。
     - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空。
@@ -98,7 +98,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 
 1. **Worker 独立错峰巡检调度器**：
     - 废除任务执行尾部的 30 秒自调度逻辑，由 Worker 主循环的 `_schedule_periodic_sync_once` 每 60 秒定期巡检；
-    - 对所有 `sync_enabled=True` 账号的有效收件箱（`role="inbox"` 且非 paused），若距离上次成功同步超过设定阈值（默认 1200 秒 / 20 分钟，环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S` 可调），且无在途任务，自动入队 `SYNC_FOLDER_DELTA`（`priority = 75`）；
+    - 对所有 `sync_enabled=True` 账号的有效收件箱（`role="inbox"`、`kind="container"`、`selectable=True`、`remote_state="active"`），若距离上次成功同步超过设定阈值（默认 1200 秒 / 20 分钟，环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S` 可调），且无在途任务，自动入队 `SYNC_FOLDER_DELTA`（`priority = 75`）；
     - 批量超期任务采用时间窗口错峰打散（Stagger），将各任务的 `run_after` 均匀分散在轮询周期内，避免多账号（如 300 邮箱）并发触发服务商连接风控与本地队列雷暴。
 2. **增量收信连带正文自动存库流水线**：
     - 增量同步（`sync_folder_delta`）拉取新邮件元数据并持久化入库后（`upserted > 0`），自动在同事务中入队 `ARCHIVE_MIME_BATCH`（`priority = 60`，去重键 `archive_mime_batch:{account_id}`）；
@@ -111,7 +111,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
     - 长连接走独立配额（集中配置默认 32，与账号总数无关），不占用 `connection_slots` 的 8 个任务槽位；配额席位只按邮件数据分配：以收件箱内现存邮件的服务器到达时间（INTERNALDATE）最大值倒序为主序，空收件箱账号整体居后（组内按其他文件夹到达时间、账号创建时间、账号 id 定序），同组内带滞回防抖；持有 IDLE 的账号跳过 t057 收件箱轮询、让位后恢复轮询；
     - 无 IDLE 能力、永久认证失败、反复断线退避中的账号自动降级为纯轮询，watcher 异常不影响调度主循环，也不把账号标记为永久 failed；watcher 状态经 `AppSetting` 的 `worker:idle_state` 记录暴露。
 2. **全文件夹 STATUS 周期巡检与状态彻底隔离 (A14)**：
-    - Worker 调度周期内对全部非收件箱、非 paused 文件夹做短连接 STATUS 探测（IMAP STATUS 不 SELECT 不 FETCH；Graph 以文件夹计数接口探测），探测连接走任务槽位预算；
+    - Worker 调度周期内对全部非收件箱、可同步物理目录（`kind="container"`、`selectable=True`、`remote_state="active"`）做短连接 STATUS 探测（IMAP STATUS 不 SELECT 不 FETCH；Graph 以文件夹计数接口探测），探测连接走任务槽位预算；
     - 探测基线与巡检时钟独立存储于 `FolderPatrolStatus` 模型（`folder_patrol_status` 表），与 `SyncCheckpoint.cursor` 协议同步游标彻底解耦分离，随文件夹级联删除；仅在文件夹全量扫描已完成（`SyncCheckpoint.full_scan_complete`）且具备基线时参与变化判定，UIDVALIDITY 重建或未完成全量扫描时不触发 delta 入队；
     - 仅双方均有值的维度参与变化判定，无变化零入队，变化才以 `priority = 75` 入队 delta；单轮上限与最久未探测轮转治理规模，单夹失败隔离不影响其余文件夹；
     - 集中配置提供 IDLE 与巡检两个独立开关，两者都关即回到 t057 现状。
@@ -127,7 +127,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 1. **账号健康状态机三维正交模型**：
     - 账号级单一 `sync_status`（`idle` / `running` / `failed` / `auth_failed`）彻底移除，由 `src/mail_core/accounts/health.py` 统一维护四个正交字段：`credential_state`（`valid` / `invalid`，`invalid` 时 `sync_enabled=false`）只由认证结果决定，`connectivity_state`（`connected` / `degraded` / `unreachable`）只由传输可达性决定，`sync_activity`（`idle` / `syncing`）只表示是否有同步任务在途，链路诊断写入脱敏 `last_connectivity_error`；三者互不推导、互不覆盖，OpenAPI 与前端 `AccountOut` / `AccountSummary` 契约随新四字段收敛。
     - 传输层网络抖动、超时与限流只作用于 `connectivity_state`，不得污染凭据态，也不外溢为账号认证失败或侧栏全局报警；后台静默同步故障同理不外溢。连接态熔断以连续 5 次失败且跨越 5 分钟窗口为阈值才置 `unreachable`，任一次链路成功即复位 `connected`，单次抖动只置 `degraded`。
-    - Folder 级 `folders.sync_status`（`paused` / `idle`）仅用于物理 mailbox（`kind=container`）；派生视图（`kind=view`）没有暂停语义，账号健康状态变更不得触碰文件夹状态。
+    - Folder 级生命周期由正交三轴表达（`t092` 拆除过载 `folders.sync_status`）：`kind`（`container` / `view`）、`selectable`（`bool`，表达 IMAP `\Noselect` 节点）与 `remote_state`（`active` / `missing`，统一表达远端存续）；仅可选择且远端存在的物理目录（`kind="container"`、`selectable=True`、`remote_state="active"`）进入同步与轮询/巡检，派生视图（`kind="view"`）只做投影检索且统计/列表过滤 `remote_state="active"`，账号健康状态变更不得触碰文件夹状态。
 2. **Worker 统一重试调度**：
     - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`WorkerJob.execution_origin`（`foreground` / `background` 非空持久化列，迁移 `20261125_0006`）作为任务执行血缘一等公民——`enqueue_job` 强制显式声明并在 `complete_job` / `reschedule_job` / `delta` / `engine` / `remote_push` 中自动继承，`resolve_sync_context` 直接依据该列结合 `SyncRequest.scope` fail-closed 裁决后台隔离（不再依赖自由 payload `"background"` 猜测），`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排。
     - 失败是否影响账号健康状态由 Worker 框架集中裁定：后台静默任务失败不触发侧栏全局报警，认证类失败才更新 `credential_state`，链路类失败累计到熔断阈值才更新 `connectivity_state`，同步任务在途状态仅由 `sync_activity` 反映；凭据态与连接态始终正交，不因单次抖动互相污染。

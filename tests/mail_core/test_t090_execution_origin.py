@@ -25,7 +25,7 @@ from mail_core.mail.domain.enums import (
     ExecutionOrigin,
     JobStatus,
     JobType,
-    SyncStatus,
+    FolderRemoteState,
 )
 from mail_core.mail.storage.models import (
     Account,
@@ -74,7 +74,7 @@ def _seed_account_and_folders(session, *, baseline: bool = True):
         remote_id="INBOX",
         name="INBOX",
         role="inbox",
-        sync_status=SyncStatus.IDLE.value,
+        remote_state=FolderRemoteState.ACTIVE.value,
     )
     sent = Folder(
         id=uuid.uuid4(),
@@ -82,7 +82,7 @@ def _seed_account_and_folders(session, *, baseline: bool = True):
         remote_id="SENT",
         name="SENT",
         role="sent",
-        sync_status=SyncStatus.IDLE.value,
+        remote_state=FolderRemoteState.ACTIVE.value,
     )
     session.add_all([inbox, sent])
     session.flush()

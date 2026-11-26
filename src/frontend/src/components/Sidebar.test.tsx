@@ -178,27 +178,27 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
       if (options.failAcc1Stats) return json({ detail: 'folder stats unavailable' }, 500)
       if (options.emptyFoldersAcc1) return json({ account_id: 'acc-1', folders: [] })
       if (options.duplicateInboxFoldersAcc1) return json({ account_id: 'acc-1', folders: [
-        { folder_id: 'inbox-1', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 2, total_count: 9, parent_remote_id: null },
-        { folder_id: 'inbox-alias', remote_id: '收件箱', name: '收件箱', role: 'inbox', unread_count: 0, total_count: 0, parent_remote_id: null },
+        { folder_id: 'inbox-1', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', kind: 'container', selectable: true, unread_count: 2, total_count: 9, parent_remote_id: null },
+        { folder_id: 'inbox-alias', remote_id: '收件箱', name: '收件箱', role: 'inbox', kind: 'container', selectable: true, unread_count: 0, total_count: 0, parent_remote_id: null },
       ] })
       if (options.nonSelectableParentAcc1) return json({ account_id: 'acc-1', folders: [
-        { folder_id: 'other-parent', remote_id: 'Other', name: '其他文件夹', role: 'other', sync_status: 'paused', unread_count: null, total_count: null, parent_remote_id: null },
-        { folder_id: 'qq-subscription', remote_id: 'Other/QQ邮件订阅', name: 'QQ邮件订阅', role: 'other', sync_status: 'idle', unread_count: 0, total_count: 0, parent_remote_id: 'Other' },
+        { folder_id: 'other-parent', remote_id: 'Other', name: '其他文件夹', role: 'other', kind: 'container', selectable: false, unread_count: null, total_count: null, parent_remote_id: null },
+        { folder_id: 'qq-subscription', remote_id: 'Other/QQ邮件订阅', name: 'QQ邮件订阅', role: 'other', kind: 'container', selectable: true, unread_count: 0, total_count: 0, parent_remote_id: 'Other' },
       ] })
       if (options.missingInboxAcc1) return json({ account_id: 'acc-1', folders: [
-        { folder_id: 'sent-1', remote_id: 'Sent', name: 'Sent', role: 'sent', unread_count: 4, total_count: 8 },
-        { folder_id: 'other-1', remote_id: 'Other', name: 'Other', role: 'other', unread_count: 6, total_count: 10 },
+        { folder_id: 'sent-1', remote_id: 'Sent', name: 'Sent', role: 'sent', kind: 'container', selectable: true, unread_count: 4, total_count: 8 },
+        { folder_id: 'other-1', remote_id: 'Other', name: 'Other', role: 'other', kind: 'container', selectable: true, unread_count: 6, total_count: 10 },
       ] })
       return json({ account_id: 'acc-1', folders: [
-      { folder_id: 'inbox-1', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 2, total_count: 9, parent_remote_id: null },
-      { folder_id: 'drafts-1', remote_id: 'Drafts', name: 'Drafts', role: 'drafts', unread_count: 0, total_count: 1, parent_remote_id: null },
-      { folder_id: 'work-child', remote_id: 'Work/Invoices', name: 'Invoices', role: 'other', unread_count: 0, total_count: 3, parent_remote_id: 'Work' },
-      { folder_id: 'work', remote_id: 'Work', name: 'Work', role: 'other', unread_count: 0, total_count: 0, parent_remote_id: null },
+      { folder_id: 'inbox-1', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', kind: 'container', selectable: true, unread_count: 2, total_count: 9, parent_remote_id: null },
+      { folder_id: 'drafts-1', remote_id: 'Drafts', name: 'Drafts', role: 'drafts', kind: 'container', selectable: true, unread_count: 0, total_count: 1, parent_remote_id: null },
+      { folder_id: 'work-child', remote_id: 'Work/Invoices', name: 'Invoices', role: 'other', kind: 'container', selectable: true, unread_count: 0, total_count: 3, parent_remote_id: 'Work' },
+      { folder_id: 'work', remote_id: 'Work', name: 'Work', role: 'other', kind: 'container', selectable: true, unread_count: 0, total_count: 0, parent_remote_id: null },
     ] })
     }
     if (url.pathname === '/api/mail/accounts/acc-2/folder-stats') {
       if (options.failAcc2Stats) return json({ detail: 'folder stats unavailable' }, 500)
-      return json({ account_id: 'acc-2', folders: [{ folder_id: 'inbox-2', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 1, total_count: 4 }] })
+      return json({ account_id: 'acc-2', folders: [{ folder_id: 'inbox-2', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', kind: 'container', selectable: true, unread_count: 1, total_count: 4 }] })
     }
     if (url.pathname === '/api/sidebar/layout' && method === 'PUT') {
       if (options.failLayout) return json({ detail: 'layout failed' }, 500)
@@ -1280,14 +1280,14 @@ describe('<Sidebar />', () => {
 
   it('flattens Gmail [Gmail] namespace folders, strips prefixes and presents standard names (p058)', async () => {
     const gmailFolders = [
-      { folder_id: 'g-inbox', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 5, total_count: 10, parent_remote_id: null },
-      { folder_id: 'g-root', remote_id: '[Gmail]', name: '[Gmail]', role: 'other', sync_status: 'paused', unread_count: null, total_count: null, parent_remote_id: null },
-      { folder_id: 'g-sent', remote_id: '[Gmail]/已发邮件', name: '[Gmail]/已发邮件', role: 'sent', unread_count: 0, total_count: 5, parent_remote_id: '[Gmail]' },
-      { folder_id: 'g-drafts', remote_id: '[Gmail]/草稿', name: '[Gmail]/草稿', role: 'drafts', unread_count: 0, total_count: 2, parent_remote_id: '[Gmail]' },
-      { folder_id: 'g-all', remote_id: '[Gmail]/所有邮件', name: '[Gmail]/所有邮件', role: 'all', sync_status: 'idle', unread_count: 5, total_count: 100, parent_remote_id: '[Gmail]' },
-      { folder_id: 'g-starred', remote_id: '[Gmail]/已加星标', name: '[Gmail]/已加星标', role: 'flagged', unread_count: 0, total_count: 10, parent_remote_id: '[Gmail]' },
-      { folder_id: 'g-important', remote_id: '[Gmail]/重要', name: '[Gmail]/重要', role: 'important', sync_status: 'idle', unread_count: 2, total_count: 20, parent_remote_id: '[Gmail]' },
-      { folder_id: 'g-notes', remote_id: 'Notes', name: 'Notes', role: 'other', unread_count: 0, total_count: 1, parent_remote_id: null },
+      { folder_id: 'g-inbox', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', kind: 'container', selectable: true, unread_count: 5, total_count: 10, parent_remote_id: null },
+      { folder_id: 'g-root', remote_id: '[Gmail]', name: '[Gmail]', role: 'other', kind: 'container', selectable: false, unread_count: null, total_count: null, parent_remote_id: null },
+      { folder_id: 'g-sent', remote_id: '[Gmail]/已发邮件', name: '[Gmail]/已发邮件', role: 'sent', kind: 'view', selectable: true, unread_count: 0, total_count: 5, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-drafts', remote_id: '[Gmail]/草稿', name: '[Gmail]/草稿', role: 'drafts', kind: 'view', selectable: true, unread_count: 0, total_count: 2, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-all', remote_id: '[Gmail]/所有邮件', name: '[Gmail]/所有邮件', role: 'all', kind: 'view', selectable: true, unread_count: 5, total_count: 100, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-starred', remote_id: '[Gmail]/已加星标', name: '[Gmail]/已加星标', role: 'flagged', kind: 'view', selectable: true, unread_count: 0, total_count: 10, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-important', remote_id: '[Gmail]/重要', name: '[Gmail]/重要', role: 'important', kind: 'view', selectable: true, unread_count: 2, total_count: 20, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-notes', remote_id: 'Notes', name: 'Notes', role: 'other', kind: 'container', selectable: true, unread_count: 0, total_count: 1, parent_remote_id: null },
     ]
     mockApi({
       foldersAcc1: gmailFolders,
@@ -1408,5 +1408,48 @@ describe('<Sidebar />', () => {
     await waitFor(() => {
       expect(container.querySelector('.tree-inline-form input[aria-label="重命名分组"]')).toBeNull()
     })
+  })
+
+  it('t092: trusts backend role and selectable orthogonal fields without duplicate system rows', async () => {
+    const gmailEnglishFolders = [
+      { folder_id: 'g-inbox', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', kind: 'container', selectable: true, unread_count: 1, total_count: 3, parent_remote_id: null },
+      { folder_id: 'g-root', remote_id: '[Gmail]', name: '[Gmail]', role: 'other', kind: 'container', selectable: false, unread_count: null, total_count: null, parent_remote_id: null },
+      { folder_id: 'g-imp', remote_id: '[Gmail]/Important', name: '[Gmail]/Important', role: 'important', kind: 'view', selectable: true, unread_count: 1, total_count: 4, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-all', remote_id: '[Gmail]/All Mail', name: '[Gmail]/All Mail', role: 'all', kind: 'view', selectable: true, unread_count: 2, total_count: 10, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-custom', remote_id: '[Gmail]/Projects', name: '[Gmail]/Projects', role: 'other', kind: 'container', selectable: true, unread_count: 0, total_count: 1, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-imp-client', remote_id: '[Gmail]/重要客户', name: '[Gmail]/重要客户', role: 'other', kind: 'container', selectable: true, unread_count: 1, total_count: 2, parent_remote_id: '[Gmail]' },
+      { folder_id: 'sent-backup', remote_id: 'Sent Backup', name: 'Sent Backup', role: 'other', kind: 'container', selectable: true, unread_count: 0, total_count: 2, parent_remote_id: null },
+      { folder_id: 'other-root', remote_id: 'Other', name: '其他容器', role: 'other', kind: 'container', selectable: false, unread_count: null, total_count: null, parent_remote_id: null },
+      { folder_id: 'other-leaf', remote_id: 'Other/Sub', name: 'Sub', role: 'other', kind: 'container', selectable: true, unread_count: 1, total_count: 1, parent_remote_id: 'Other' },
+      { folder_id: 'arch-parent', remote_id: 'ArchiveParent', name: '归档总览', role: 'archive', kind: 'container', selectable: false, unread_count: null, total_count: null, parent_remote_id: null },
+    ]
+    mockApi({ foldersAcc1: gmailEnglishFolders })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+    await waitFor(() => expect(account.textContent).toContain('重要邮件'))
+
+    const rows = [...account.querySelectorAll<HTMLButtonElement>('.tree-folder-row')]
+    const labels = rows.map((row) => row.querySelector('.tree-label')?.textContent?.trim())
+    expect(labels.filter((label) => label === '重要邮件')).toHaveLength(1)
+    expect(labels.filter((label) => label === '所有邮件')).toHaveLength(1)
+    expect(labels.filter((label) => label === '已发送')).toHaveLength(0)
+    expect(labels).toContain('Projects')
+    expect(labels).toContain('重要客户')
+    expect(labels).toContain('Sent Backup')
+    expect(labels).not.toContain('[Gmail]')
+    expect(labels).not.toContain('[Gmail]/Projects')
+    expect(labels).not.toContain('[Gmail]/重要客户')
+
+    const nonSelectableRow = rows.find((row) => row.querySelector('.tree-label')?.textContent?.trim() === '其他容器')
+    expect(nonSelectableRow).toBeDefined()
+    expect(nonSelectableRow?.disabled).toBe(true)
+    expect(nonSelectableRow?.querySelector('.unread-badge-unknown')).toBeNull()
+
+    const nonSelectableRoleRow = rows.find((row) => row.querySelector('.tree-label')?.textContent?.trim() === '归档')
+    expect(nonSelectableRoleRow).toBeDefined()
+    expect(nonSelectableRoleRow?.disabled).toBe(true)
+    expect(nonSelectableRoleRow?.querySelector('.unread-badge-unknown')).toBeNull()
   })
 })

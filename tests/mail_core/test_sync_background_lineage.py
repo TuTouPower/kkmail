@@ -34,7 +34,7 @@ from mail_core.sync.context import (
     resolve_sync_context,
     sync_request_payload,
 )
-from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType, SyncStatus
+from mail_core.mail.domain.enums import ExecutionOrigin, FolderRemoteState, JobStatus, JobType
 from mail_core.mail.storage.models import (
     Account,
     Folder,
@@ -89,7 +89,7 @@ def _seed_account(Session, *, baselines=True):
                     remote_id=rf.remote_id,
                     name=rf.name,
                     role=rf.role,
-                    sync_status=SyncStatus.IDLE.value,
+                    remote_state=FolderRemoteState.ACTIVE.value,
                 )
             )
             session.add(

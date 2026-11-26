@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
-from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType, SyncStatus
+from mail_core.mail.domain.enums import ExecutionOrigin, FolderRemoteState, JobStatus, JobType
 from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
 from mail_core.worker.main import schedule_periodic_inbox_sync
 
@@ -26,7 +26,7 @@ def _seed_account_with_inbox(
     email_prefix: str = "sched",
     sync_enabled: bool = True,
     folder_role: str = "inbox",
-    folder_status: str = SyncStatus.IDLE.value,
+    remote_state: str = FolderRemoteState.ACTIVE.value,
 ) -> tuple[Account, Folder]:
     acc = Account(
         id=uuid.uuid4(),
@@ -44,7 +44,7 @@ def _seed_account_with_inbox(
         remote_id=f"remote-folder-{uuid.uuid4().hex[:6]}",
         name="Inbox" if folder_role == "inbox" else "Sent",
         role=folder_role,
-        sync_status=folder_status,
+        remote_state=remote_state,
     )
     session.add(folder)
     session.flush()
@@ -92,8 +92,8 @@ def test_ac001_ignores_disabled_accounts_and_paused_or_non_inbox_folders():
     with Session() as session:
         # 1. Disabled account
         acc_disabled, f_disabled = _seed_account_with_inbox(session, sync_enabled=False)
-        # 2. Paused inbox folder
-        acc_paused, f_paused = _seed_account_with_inbox(session, folder_status=SyncStatus.PAUSED.value)
+        # 2. Missing inbox folder (t092: replaces legacy paused sync_status)
+        acc_paused, f_paused = _seed_account_with_inbox(session, remote_state=FolderRemoteState.MISSING.value)
         # 3. Non-inbox folder (sent)
         acc_sent, f_sent = _seed_account_with_inbox(session, folder_role="sent")
         session.commit()

@@ -29,8 +29,8 @@ from mail_core.mail.domain.enums import (
     ArchiveState,
     ConnectivityState,
     CredentialState,
+    FolderRemoteState,
     SyncActivity,
-    SyncStatus,
     normalize_execution_origin,
 )
 
@@ -132,7 +132,10 @@ class Account(Base):
 
 class Folder(Base):
     __tablename__ = "folders"
-    __table_args__ = (UniqueConstraint("account_id", "remote_id", name="uq_folders_account_remote"),)
+    __table_args__ = (
+        UniqueConstraint("account_id", "remote_id", name="uq_folders_account_remote"),
+        CheckConstraint("remote_state IN ('active', 'missing')", name="ck_folders_remote_state"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
@@ -141,12 +144,30 @@ class Folder(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'other'"))
     kind: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'container'"))
     parent_remote_id: Mapped[Optional[str]] = mapped_column(String(512))
-    sync_status: Mapped[str] = mapped_column(
-        String(32), nullable=False, server_default=text(f"'{SyncStatus.IDLE.value}'")
+    selectable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    remote_state: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=FolderRemoteState.ACTIVE.value,
+        server_default=text(f"'{FolderRemoteState.ACTIVE.value}'"),
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+def active_folder_clause() -> Any:
+    """SQL predicate selecting folders observed in latest remote discovery."""
+    return Folder.remote_state == FolderRemoteState.ACTIVE.value
+
+
+def syncable_folder_clauses() -> tuple[Any, ...]:
+    """SQL predicates selecting active, protocol-selectable physical containers."""
+    return (
+        Folder.kind == "container",
+        Folder.selectable.is_(True),
+        Folder.remote_state == FolderRemoteState.ACTIVE.value,
     )
 
 
