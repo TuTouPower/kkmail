@@ -261,16 +261,22 @@ def api_create_account(body: AccountCreateIn, principal: AuthPrincipal = Depends
         if not _has_basic_email_shape(email):
             raise HTTPException(422, "email must have a valid address shape")
     try:
-        from mail_core.accounts.connection import validate_connection, merge_credentials
+        from mail_core.accounts.connection import (
+            merge_credentials,
+            normalize_account_config,
+            validate_connection,
+        )
+
+        normalized_config = normalize_account_config(body.config) if body.config is not None else None
         if not body.oauth_flow_id and body.provider in ("imap", "graph"):
             cleaned = merge_credentials(body.provider, {}, body.credentials or {})
-            validate_connection(email, body.provider, body.config or {}, cleaned)
+            validate_connection(email, body.provider, normalized_config or {}, cleaned)
         acc = create_account_app(
             email=email,
             provider=body.provider,
             display_name=body.display_name,
             group_id=body.group_id,
-            config=body.config,
+            config=normalized_config,
             credentials=body.credentials,
             oauth_flow_id=body.oauth_flow_id,
             principal=principal,

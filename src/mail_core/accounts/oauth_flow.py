@@ -607,15 +607,17 @@ def consume_oauth_flow_for_create(
         staged = dict(flow.get("staged_credentials") or {})
         if not verified_email or not staged.get("refresh_token") or not staged.get("client_id"):
             raise ValueError("OAuth 授权结果缺少已核实的邮箱或离线凭据")
-        merged_config = {
-            **(config or {}),
-            "provider_profile": str(flow.get("provider") or "microsoft"),
-            "oauth_client_type": str(flow.get("client_type") or "public"),
-            **({"oauth_tenant": flow["tenant"], "microsoft_user_id": flow["microsoft_user_id"]}
-               if flow.get("provider") == "microsoft" else {}),
-        }
-        from mail_core.accounts.connection import validate_connection
+        from mail_core.accounts.connection import normalize_account_config, validate_connection
 
+        merged_config = normalize_account_config(
+            {
+                **(config or {}),
+                "provider_profile": str(flow.get("provider") or "microsoft"),
+                "oauth_client_type": str(flow.get("client_type") or "public"),
+                **({"oauth_tenant": flow["tenant"], "microsoft_user_id": flow["microsoft_user_id"]}
+                   if flow.get("provider") == "microsoft" else {}),
+            }
+        )
         validate_connection(verified_email, (provider or "").lower(), merged_config, staged)
         if session.scalar(select(Account.id).where(Account.email == verified_email)) is not None:
             raise ValueError(f"邮箱账户 {verified_email} 已存在，不能重复添加或覆盖现有账户")
@@ -668,16 +670,18 @@ def consume_oauth_flow_for_reauthorize(
         keep_existing_refresh = bool(flow.get("keep_existing_refresh_token"))
         client_type = str(flow.get("client_type") or "public")
         provider_profile = str(flow.get("provider") or "microsoft")
-        merged_config = {
-            **(account.config or {}),
-            **(config_patch or {}),
-            "provider_profile": provider_profile,
-            "oauth_client_type": client_type,
-            **({"oauth_tenant": flow["tenant"], "microsoft_user_id": flow["microsoft_user_id"]}
-               if provider_profile == "microsoft" else {}),
-        }
-        from mail_core.accounts.connection import validate_connection
+        from mail_core.accounts.connection import normalize_account_config, validate_connection
 
+        merged_config = normalize_account_config(
+            {
+                **(account.config or {}),
+                **(config_patch or {}),
+                "provider_profile": provider_profile,
+                "oauth_client_type": client_type,
+                **({"oauth_tenant": flow["tenant"], "microsoft_user_id": flow["microsoft_user_id"]}
+                   if provider_profile == "microsoft" else {}),
+            }
+        )
         validate_connection(account.email, account.provider, merged_config, None, require_credentials=False)
         cred_ref = account.credential_ref or f"account:{account.id}"
         with credential_edit(get_credential_store(), cred_ref, session=session) as saved:

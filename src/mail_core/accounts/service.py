@@ -42,12 +42,13 @@ def create_account(
 ) -> Account:
     lock_sidebar_layout(session)
     email_norm = email.strip().lower()
-    from mail_core.accounts.connection import validate_connection
+    from mail_core.accounts.connection import normalize_account_config, validate_connection
 
+    normalized_config = normalize_account_config(config)
     validate_connection(
         email_norm,
         str(provider).lower(),
-        config or {},
+        normalized_config,
         credentials,
         require_credentials=credentials is not None,
     )
@@ -62,7 +63,7 @@ def create_account(
         provider=str(provider),
         credential_ref=credential_ref,
         display_name=display_name,
-        config=config or {},
+        config=normalized_config,
         group_id=group_id,
     )
     master_max = session.scalar(select(func.max(Account.master_order)))

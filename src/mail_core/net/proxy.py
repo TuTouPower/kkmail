@@ -6,7 +6,7 @@ import ipaddress
 import os
 from dataclasses import dataclass, field
 from typing import Literal, Mapping
-from urllib.parse import unquote, urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit
 
 ProxyScheme = Literal["http", "https", "socks5", "socks5h"]
 ProxyMode = Literal["auto", "direct"]
@@ -47,7 +47,7 @@ class ProxyConfig:
         return self.safe_key()
 
 
-def _resolve_proxy_port(parts: Any, scheme: str) -> int:
+def _resolve_proxy_port(parts: SplitResult, scheme: str) -> int:
     try:
         port = parts.port
     except ValueError as exc:

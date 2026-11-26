@@ -473,3 +473,196 @@ def test_urlopen_outbound_default_ports_and_host_header_through_proxies(
                 assert socks_proxy.connects == [(0x03, "graph.test", 443)]
     finally:
         default_bulkhead().reset()
+
+
+def test_resolve_proxy_port_type_hints_resolve_cleanly():
+    import typing
+    from urllib.parse import SplitResult
+
+    from mail_core.net import proxy
+
+    hints = typing.get_type_hints(proxy._resolve_proxy_port)
+    assert hints["parts"] is SplitResult
+    assert hints["return"] is int
+
+
+def test_api_create_account_normalizes_blank_proxy_config(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from mail_core.api.app import app
+    from mail_core.mail.application.accounts import AccountDTO
+    from tests.mail_core.conftest import TEST_API_KEY
+
+    captured: dict = {}
+
+    def _fake_create_account_app(**kwargs):
+        captured.update(kwargs)
+        return AccountDTO(
+            id=str(uuid.uuid4()),
+            email=kwargs["email"],
+            provider=kwargs["provider"],
+            display_name=kwargs.get("display_name"),
+            group_id=None,
+            group_name=None,
+            group_color=None,
+            status="active",
+            credential_state="valid",
+            connectivity_state="connected",
+            sync_activity="idle",
+            last_connectivity_error=None,
+            sync_enabled=True,
+            account_type="imap",
+            remark=None,
+        )
+
+    monkeypatch.setattr("mail_core.api.accounts.create_account_app", _fake_create_account_app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    resp = client.post(
+        "/api/accounts",
+        json={
+            "email": f"norm-api-{uuid.uuid4().hex[:8]}@gmail.com",
+            "provider": "imap",
+            "config": {"imap_host": "imap.gmail.com", "proxy_mode": "", "outbound_proxy": "   "},
+            "credentials": {"password": "pw"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["config"] == {"imap_host": "imap.gmail.com"}
+
+
+@pytest.mark.skipif(not os.environ.get("MAIL_CORE_DATABASE_URL"), reason="MAIL_CORE_DATABASE_URL not set")
+def test_create_and_oauth_flows_normalize_blank_proxy_config_pg():
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from mail_core.accounts.oauth_flow import (
+        consume_oauth_flow_for_create,
+        consume_oauth_flow_for_reauthorize,
+        session_binding_key,
+    )
+    from mail_core.api.app import app
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage.models import AuthCredential
+    from mail_core.security.auth import AuthPrincipal, get_session_epoch
+    from mail_core.security.credentials import get_credential_store, save_json_secret
+    from tests.mail_core.conftest import TEST_API_KEY
+
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    Session = get_session_factory()
+    store = get_credential_store()
+    principal = AuthPrincipal(via="api_key", api_key_digest="t089-test-digest")
+    skey = session_binding_key(principal)
+
+    with Session() as seed_sess:
+        if seed_sess.get(AuthCredential, "default") is None:
+            seed_sess.add(AuthCredential(id="default", login_password_hash="x", session_epoch=1))
+            seed_sess.commit()
+    epoch = get_session_epoch()
+
+    with Session() as session:
+        acc_created = create_account(
+            session,
+            email=f"norm-svc-{uuid.uuid4().hex[:8]}@gmail.com",
+            provider="imap",
+            config={"imap_host": "imap.gmail.com", "proxy_mode": "", "outbound_proxy": "   "},
+            credentials={"password": "pw"},
+        )
+        assert "proxy_mode" not in (acc_created.config or {})
+        assert "outbound_proxy" not in (acc_created.config or {})
+
+        create_fid = f"flow-create-{uuid.uuid4().hex}"
+        create_email = f"norm-oauth-{uuid.uuid4().hex[:8]}@outlook.com"
+        save_json_secret(
+            store,
+            f"oauth_flow:{create_fid}",
+            {
+                "status": "authorized",
+                "consumed": False,
+                "intent": "create",
+                "session_key": skey,
+                "session_epoch": epoch,
+                "provider": "microsoft",
+                "account_provider": "graph",
+                "client_type": "public",
+                "tenant": "consumers",
+                "microsoft_user_id": "ms-uid-1",
+                "expires_at": time.time() + 300,
+                "verified_email": create_email,
+                "staged_credentials": {"client_id": "cid", "refresh_token": "rtok"},
+            },
+            session=session,
+        )
+        _, create_cfg, _ = consume_oauth_flow_for_create(
+            session,
+            flow_id=create_fid,
+            principal=principal,
+            provider="graph",
+            config={"proxy_mode": "", "outbound_proxy": "   "},
+        )
+        assert "proxy_mode" not in create_cfg
+        assert "outbound_proxy" not in create_cfg
+
+        acc_graph = create_account(
+            session,
+            email=f"norm-reauth-{uuid.uuid4().hex[:8]}@outlook.com",
+            provider="graph",
+            config={
+                "provider_profile": "microsoft",
+                "microsoft_user_id": "ms-uid-2",
+                "outbound_proxy": "http://127.0.0.1:7890",
+                "proxy_mode": "direct",
+            },
+            credentials={"client_id": "cid", "refresh_token": "rtok-old"},
+        )
+        reauth_fid = f"flow-reauth-{uuid.uuid4().hex}"
+        save_json_secret(
+            store,
+            f"oauth_flow:{reauth_fid}",
+            {
+                "status": "authorized",
+                "consumed": False,
+                "intent": "reauthorize",
+                "session_key": skey,
+                "session_epoch": epoch,
+                "account_id": str(acc_graph.id),
+                "provider": "microsoft",
+                "account_provider": "graph",
+                "client_type": "public",
+                "tenant": "consumers",
+                "microsoft_user_id": "ms-uid-2",
+                "expires_at": time.time() + 300,
+                "verified_email": acc_graph.email,
+                "staged_credentials": {"client_id": "cid", "refresh_token": "rtok-new"},
+            },
+            session=session,
+        )
+        reauth_cfg = consume_oauth_flow_for_reauthorize(
+            session,
+            account=acc_graph,
+            flow_id=reauth_fid,
+            principal=principal,
+            config_patch={"proxy_mode": "", "outbound_proxy": "   "},
+        )
+        assert "proxy_mode" not in reauth_cfg
+        assert "outbound_proxy" not in reauth_cfg
+        assert "proxy_mode" not in (acc_graph.config or {})
+        assert "outbound_proxy" not in (acc_graph.config or {})
+        session.rollback()
+
+    api_email = f"norm-pg-api-{uuid.uuid4().hex[:8]}@gmail.com"
+    resp = client.post(
+        "/api/accounts",
+        json={
+            "email": api_email,
+            "provider": "imap",
+            "config": {"imap_host": "imap.gmail.com", "proxy_mode": "", "outbound_proxy": "   "},
+            "credentials": {"password": "pw"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    with Session() as session:
+        persisted = session.get(Account, uuid.UUID(resp.json()["id"]))
+        assert persisted is not None
+        assert "proxy_mode" not in (persisted.config or {})
+        assert "outbound_proxy" not in (persisted.config or {})
