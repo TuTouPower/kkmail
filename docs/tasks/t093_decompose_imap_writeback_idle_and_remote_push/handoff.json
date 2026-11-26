@@ -1,0 +1,15 @@
+{
+  "tid": "t093",
+  "attempt": 1,
+  "execution_id": "91061c7d0dc845e2bb3a6566f14d6d88",
+  "status": "done",
+  "branch": "t093_decompose_imap_writeback_idle_and_remote_push",
+  "base_sha": "9f7566857e1a767cedf74debf6ec6843f8109101",
+  "spec_source_sha": "9f7566857e1a767cedf74debf6ec6843f8109101",
+  "tests": "全量 PostgreSQL + 真实 Dovecot IMAP 后端测试（`scripts/run-mail-core-tests.sh`：2297 passed, 2 skipped）；模板契约测试（389 passed, 1 skipped）；前端 Vitest/tsc/build/oxlint（56 test files / 599 tests + tsc + build + oxlint）、桌面端测试、依赖锁（ok）、OpenAPI（ok, 46 paths）与敏感文档扫描（36 files, 0 violations）全部通过（前端/桌面门禁在最后一次 `src/` 与 `docs/blueprint/` 修改后通过，后续仅补强 `tests/mail_core/test_t093_writeback_idle_and_push_invariants.py` 断言并经全量 2297 套件重验通过）",
+  "blackbox": "Playwright E2E 冒烟（`npm --prefix src/frontend run test:e2e`：26 passed，最后一次 `src/` 与 `docs/blueprint/` 改动后全量通过）",
+  "review": "Round 2 独立代码审阅与测试审阅均 `PASS`（Round 1 全部 finding 已修，Round 2 零新 finding；`task.py review-status` `overall=PASS`，`reviewed_scope=14664e3b9ecd2c0e`）",
+  "review_scope": "14664e3b9ecd2c0e",
+  "pending": [],
+  "findings": []
+}

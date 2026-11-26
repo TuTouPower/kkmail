@@ -28,10 +28,10 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：完成 IMAP 批量远端写回（`apply_remote_operations`）的分层拆解并消除 `\Seen`/`\Flagged` 重复验证分支，使写回入口及全部新增/重构辅助函数圈复杂度均低于 `15`；且既有批量成功回写、`UIDVALIDITY` 失配拒写、无效 UID 与缺少目标路径拒写、`MOVE` 空号 pre-`FETCH` 拦截、`COPYUID` 解析，以及容量异常重抛与未成功传输异常传播语义完全保持不变。
-- [ ] AC-002：完成 IMAP 专有 `IDLE` 会话开启（`open_idle_session`）的协商与异常收口拆解，使入口及辅助函数圈复杂度均低于 `15`；且完整保持绕过并发槽位预算、`IDLE` 能力与 `SELECT` 检查抛出 `IdleNotSupportedError`、缓冲读端 `settimeout(None)`、容量异常透传以及非容量异常附加 `FailurePhase.IMAP` 与 socket 清理语义不变。
-- [ ] AC-003：完成同步层远端写回协调器（`push_remote_operations`）各阶段状态机拆解并消除 `build_provider` 与批次执行两处重复的 `CAPACITY_ERRORS` 退避回退逻辑，使协调入口及全部新增/重构辅助函数圈复杂度均低于 `15`；且严格保持 `LeaseBusy` 退出、批前 `IN_PROGRESS` 与 `heartbeat_lease`、跨块心跳与 fencing 校验、`fencing_mismatch` 留 `IN_PROGRESS` 交 reconcile、CAS 变更保留 `PENDING`、`RemoteIdentityConflict` 拒绝完成、限流/瞬时/永久失败结算以及 `execution_origin` 延续调度契约完全不变。
-- [ ] AC-004：若拆分引入新模块或调整分层，则同步更新对应模块注释与 `docs/blueprint/architecture.md`（不改变长期接口契约，无长期 spec 变更时按规范登记理由）；通过后端完整 PostgreSQL 测试套件、真实 IMAP Dovecot 契约测试、前端单测与构建、桌面端测试、E2E 冒烟及模板契约门禁。
+- [x] AC-001：完成 IMAP 批量远端写回（`apply_remote_operations`）的分层拆解并消除 `\Seen`/`\Flagged` 重复验证分支，使写回入口及全部新增/重构辅助函数圈复杂度均低于 `15`；且既有批量成功回写、`UIDVALIDITY` 失配拒写、无效 UID 与缺少目标路径拒写、`MOVE` 空号 pre-`FETCH` 拦截、`COPYUID` 解析，以及容量异常重抛与未成功传输异常传播语义完全保持不变。
+- [x] AC-002：完成 IMAP 专有 `IDLE` 会话开启（`open_idle_session`）的协商与异常收口拆解，使入口及辅助函数圈复杂度均低于 `15`；且完整保持绕过并发槽位预算、`IDLE` 能力与 `SELECT` 检查抛出 `IdleNotSupportedError`、缓冲读端 `settimeout(None)`、容量异常透传以及非容量异常附加 `FailurePhase.IMAP` 与 socket 清理语义不变。
+- [x] AC-003：完成同步层远端写回协调器（`push_remote_operations`）各阶段状态机拆解并消除 `build_provider` 与批次执行两处重复的 `CAPACITY_ERRORS` 退避回退逻辑，使协调入口及全部新增/重构辅助函数圈复杂度均低于 `15`；且严格保持 `LeaseBusy` 退出、批前 `IN_PROGRESS` 与 `heartbeat_lease`、跨块心跳与 fencing 校验、`fencing_mismatch` 留 `IN_PROGRESS` 交 reconcile、CAS 变更保留 `PENDING`、`RemoteIdentityConflict` 拒绝完成、限流/瞬时/永久失败结算以及 `execution_origin` 延续调度契约完全不变。
+- [x] AC-004：若拆分引入新模块或调整分层，则同步更新对应模块注释与 `docs/blueprint/architecture.md`（不改变长期接口契约，无长期 spec 变更时按规范登记理由）；通过后端完整 PostgreSQL 测试套件、真实 IMAP Dovecot 契约测试、前端单测与构建、桌面端测试、E2E 冒烟及模板契约门禁。
 
 ### 可测试性声明
 
