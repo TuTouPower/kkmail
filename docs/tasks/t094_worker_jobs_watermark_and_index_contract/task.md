@@ -6,6 +6,8 @@
 
 核实结论（2026-11-28）：症状是 seq_scan，病根是同一事实存在两个权威源。`SyncCheckpoint` 模型及 `updated_at` 已存在（`models.py:304-320`），`schedule_periodic_inbox_sync` 已读取 checkpoint（`worker/main.py:250-252`），却又叠加扫描 `worker_jobs` 终态行并用 `max()` 取更大值兜底（`worker/main.py:253-264`）——把「上次同步结束时间」这一状态属性寄生在瞬态任务队列里。重复 GIN 索引实际残留在 baseline 迁移（`20261107_0001_unified_baseline.py:469` 创建 `ix_message_search_from_trgm`，471–477 创建 `ix_message_search_from_text_trgm`），ORM 模型（`models.py:504`）仅保留后者。7 天保留仍在（`worker/main.py:139,145`、`realtime/outbox.py:17`）。
 
+2026-11-28 静态规格审阅（基线 67735d62）指出原规格六处缺口：水位状态转换缺失、终态回收与同步请求结算冲突、消费点与并发回放边界未定义、计划断言缺适用边界、统计精度契约不可测、清理积压稳态空缺。本规格逐条收口。
+
 按开发铁律（架构至上、拒绝妥协、零兼容性负担）：补终态索引等于固化错误查询，缩短保留期加 env 覆盖属于兼容心理。必须删除反推路径、让 `SyncCheckpoint` 成为唯一水位权威，将队列回归纯瞬态语义，并一次性洗净索引残留。
 
 ## 契约区
@@ -14,21 +16,27 @@
 
 - **同步水位单一权威化**：
     - 删除 `schedule_periodic_inbox_sync`（`src/mail_core/worker/main.py:253-264`）中从 `worker_jobs` 终态行按 `dedupe_key` 反推 `last_synced_at` 的整段查询与 `max()` 兜底；到期判定只读 `SyncCheckpoint`。
-    - 在 `SyncCheckpoint` 增加最近一次 delta 同步完成/失败时间戳列，在 delta 同步落库事务内原子更新（成功与失败均写），使检查点自带调度所需的水位事实，不再依赖任务历史。
+    - 在 `SyncCheckpoint` 新增水位列，语义裁决为「最近一次 delta 执行链结算时间」，而非单次尝试结束时间：成功链最终结算、失败、跳过（`baseline_required` / `baseline_pending`）、重试耗尽、取消均推进水位；续页中、限流等待、租约延期、游标失效转重建等中间态不推进，进行中目录由活跃任务去重防止重复排期。
+    - 写入边界：`delta.py` 的数据页提交、后继入队、失败结算分属不同事务；水位必须在对应结算事务内写入——成功在最终页提交且执行链完成标记落库时写，失败/跳过在结算事务写；旧执行受 `fencing_token` 约束，令牌落后不得覆盖新执行写入的水位。
+    - 升级初始化与首次排期：迁移将既有 checkpoint 的新列初始化为其 `updated_at`（视作已有同步事实）；无 checkpoint 或 `full_scan_complete=false` 的行不排 delta，由基线发现/全扫描建立基线；基线就绪但从未做过 delta 的行首次按既有错峰机制排期一次；重建中状态不排期，直到重建完成。
 - **瞬态队列生命周期契约化**：
-    - 将已完成 `worker_jobs` 与已发布 `outbox` 的保留从 7 天收敛为消费即删或固定极短 TTL（以代码契约表达，不提供产品级 env 保留开关）；SSE 游标落后超过窗口一律走 `resync` 快照重同步。
-    - 移除 `worker/main.py:139,145` 与 `realtime/outbox.py:17` 的 7 天保留常量。
-- **索引契约洗净与统计收敛**：
+    - 分别定义 `worker_jobs` 与 `outbox` 的保留资格、计时起点、固定窗口与回收滞后。
+    - `worker_jobs`：只有同步请求结算已持久化、且后续重聚合无需该关联的终态行才可回收；否则先把仍需参与聚合的结果持久化。禁止在慢目录完成前回收同一目标下已终态失败的关联，避免重聚合成误判成功。
+    - `outbox`：只有已发布、位于已发布连续前缀且回收游标已推进的行才可回收，未发布行受保护；回收窗口下界不小于分发与断线重放的最大在途时长。清理与实时分发/断线重放交错时，客户端须收到连续事件，或明确触发 `resync` 并收敛到最新状态。
+    - 移除所有 7 天保留常量，含 `prune_completed_jobs` 自身默认参数、`worker/main.py:139,145` 与 `realtime/outbox.py:17`；保留窗口以代码契约表达，不提供产品级 env 开关。
+- **索引契约洗净、统计收敛与积压排空**：
     - 新增面向清理的部分索引 `(updated_at) WHERE status IN ('done','failed')`，仅服务 `prune_completed_jobs`（`src/mail_core/sync/jobs.py:720-743`），禁止用于水位反推。
     - 通过 Alembic 迁移 DROP `ix_message_search_from_trgm`，保证 `message_search.from_text` 在 `gin_trgm_ops` 下仅存唯一 GIN 索引；核查其余 `pg_trgm`/`tsvector` 索引最小完备集。
-    - 迁移收尾及批量同步收尾内建 `ANALYZE`，修复 `n_live_tup` 与真实行数偏差（实测 68 对 22,095）。
-- **契约测试补齐**：新增 `EXPLAIN` 索引命中回归（禁止对 `worker_jobs` 产生 `Seq Scan`）、水位来源唯一性测试、schema 同列同操作符类重复索引唯一性断言。
+    - 统计契约：`message_search`、`messages`、`message_bodies` 三表各以自身真实行数为参照，定义「大批量」触发阈值、目标表与频率上限，明确相对误差范围；批量同步/迁移后刷新统计，禁止每页或每次短 delta 重复 `ANALYZE`。
+    - 为近 8 万终态 job 与 8.6 万已发布事件指定积压排空目标、单批写入上限与稳态行数观测口径；保留窗口验收以清理节拍和积压收敛为准，DELETE 不直接缩小堆文件的事实须在观测口径中说明。
+- **契约测试补齐**：水位来源唯一性与状态转换测试、计划适用边界测试（生产调用形态、代表性数据分布、目标 SQL、通用查询计划）、回收资格与交错回放测试、统计契约测试、schema 同列同操作符类重复索引唯一性断言。
 
 ### 非范围
 
 - 不新增「反推水位」用的 `(dedupe_key, updated_at)` 终态索引。
-- 不改 `outbox` 的 SSE 发布/重放协议与 `resync` 快照机制。
+- 不改 `outbox` 的 SSE 发布/重放协议与 `resync` 快照机制本身。
 - 不改 `worker_jobs` 的 claim/dedupe 活跃态索引、任务执行血缘与并发执行模型。
+- 不改后台传输失败健康隔离语义（属 t095 写域，见「依赖与约束」）。
 - 不执行生产环境部署或线上数据操作。
 
 ### 验收标准
@@ -39,12 +47,14 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：`schedule_periodic_inbox_sync` 的到期判定仅读取 `SyncCheckpoint`，源码与测试中不存在从 `worker_jobs` 终态行反推同步水位的查询；真实 PostgreSQL 上执行该函数时 `EXPLAIN` 对 `worker_jobs` 零 `Seq Scan`。
-- [ ] AC-002：`SyncCheckpoint` 具备最近一次 delta 同步完成/失败时间戳列，且在成功与失败两条路径的落库事务内均被原子更新；到期判定结果与该时间戳严格一致，跨进程重启后保持一致。
-- [ ] AC-003：`worker_jobs` 终态行与 `outbox` 已发布行的保留窗口为消费即删或固定极短 TTL，源码中不存在 7 天保留常量；SSE 游标落后超过保留窗口时客户端走 `resync` 快照且不丢邮件。
-- [ ] AC-004：Alembic 迁移后 `message_search.from_text` 在 `gin_trgm_ops` 下仅存在一个 GIN 索引；迁移支持 `upgrade head -> downgrade -> upgrade head` 循环且 ORM schema 校验零漂移。
-- [ ] AC-005：`prune_completed_jobs` 查询命中新增部分索引（`EXPLAIN` 无 `Seq Scan`），且该索引不被任何水位判定查询引用。
-- [ ] AC-006：schema 契约测试对「同表同列同操作符类重复索引」给出唯一性断言并全绿；迁移与批量同步收尾后 `message_search`、`messages`、`message_bodies` 统计信息与真实行数一致；项目全量门禁通过。
+- [ ] AC-001：`schedule_periodic_inbox_sync` 的到期判定仅读取 `SyncCheckpoint`，源码与测试中不存在从 `worker_jobs` 终态行反推同步水位的查询；分别验收两类访问成本——到期判定不读终态（源码与计划断言），以及代表性数据分布与生产调用形态下活跃去重、终态清理命中对应部分索引（通用查询计划，不强制关闭顺扫、不只对内联常量 SQL 断言）。
+- [ ] AC-002：水位语义为执行链结算：成功、失败、跳过、重试耗尽、取消推进水位，续页/限流/租约延期/重建中不推进；水位写入与对应结算处于同一事务边界，旧执行令牌落后不得覆盖；升级后既有 checkpoint 新列按 `updated_at` 初始化，无基线/重建中/基线就绪未 delta 三状态首次排期符合约定；验收覆盖升级前后、续页/重试、失锁与重启。
+- [ ] AC-003：`worker_jobs` 与 `outbox` 各有明确的保留资格、计时起点、固定窗口与回收滞后，源码中不存在 7 天保留常量（含 `prune_completed_jobs` 自身默认参数）；仅请求结算已持久化且无需重聚合的终态行可回收，构造同目标一支终态失败、另一支仍运行，强制回收后完成另一支，请求仍结算为失败且错误码正确；`outbox` 未发布行受保护、仅连续前缀可回收，清理与分发/重放交错时客户端收到连续事件或触发 `resync` 并收敛。
+- [ ] AC-004：Alembic 迁移后 `message_search.from_text` 在 `gin_trgm_ops` 下仅存在一个 GIN 索引；迁移支持 `upgrade head -> downgrade -> upgrade head` 循环且 ORM schema 校验零漂移；schema 契约测试对「同表同列同操作符类重复索引」给出唯一性断言并全绿。
+- [ ] AC-005：`prune_completed_jobs` 在代表性数据分布与通用查询计划下命中新增部分索引且无 `Seq Scan`；该索引不被任何水位判定查询引用。
+- [ ] AC-006：`message_search`、`messages`、`message_bodies` 三表统计各以自身真实行数为参照、落在约定相对误差范围内；「大批量」阈值、目标表与 `ANALYZE` 频率上限明确，批量后刷新而日常短 delta 不重复刷新。
+- [ ] AC-007：既有终态积压在指定维护周期内排空至稳态上限，单批删除量不超上限，稳态行数观测口径明确；保留窗口验收以清理节拍与积压收敛为准。
+- [ ] AC-008：项目全量门禁（后端 PostgreSQL 测试、前端构建与单测、桌面端测试、E2E、模板门禁）通过；更新 `docs/specs/mail_sync_and_storage.md` 与对应 blueprint/决策记录。
 
 ### 可测试性声明
 
@@ -54,23 +64,26 @@
 
 <!-- /规范 -->
 
-全部 AC 可自动测试：AC-001/005 通过真实 PostgreSQL `EXPLAIN` 与源码扫描验证；AC-002 通过 delta 同步成功/失败集成测试验证；AC-003 通过保留期单元测试与 SSE 落后游标的 `resync` 集成测试验证；AC-004 通过迁移升降级循环与 schema 漂移校验验证；AC-006 通过契约测试、统计信息查询与全量门禁命令验证。
+全部 AC 可自动测试：AC-001/005 通过源码扫描与真实 PostgreSQL 通用查询计划 `EXPLAIN`（代表性种子分布、生产调用形态）验证；AC-002 通过 delta 成功/失败/跳过/续页/重试/失锁/重启集成测试与升级迁移测试验证；AC-003 通过保留期单元测试、同步请求重聚合测试与分发/重放交错集成测试验证；AC-004 通过迁移升降级循环与 schema 漂移校验验证；AC-006 通过真实行数对照与统计刷新触发条件测试验证；AC-007 通过积压种子与清理节拍测试验证；AC-008 通过全量门禁命令验证。
 
 ## 上下文区
 
 - 关联 spec：docs/specs/mail_sync_and_storage.md
-- 来源：p102（2026-11-28 核实并转办；生产实测 84,199 次 `worker_jobs` 全表扫描、两个同构 GIN 索引、7 天保留；核实修正：重复索引残留在 baseline 迁移而非 ORM 模型，水位双源在 `worker/main.py:250-264`）
+- 来源：p102（2026-11-28 核实并转办；生产实测 84,199 次 `worker_jobs` 全表扫描、两个同构 GIN 索引、7 天保留；核实修正：重复索引残留在 baseline 迁移而非 ORM 模型，水位双源在 `worker/main.py:250-264`）；2026-11-28 静态规格审阅意见（基线 67735d62）逐条收口六处缺口。
 
 ### 有意不测
 
-- 生产 76.6 亿行累计扫描规模：不在 CI 复现绝对数值，改用等价规模种子数据在真实 PostgreSQL 上执行 `EXPLAIN` 验证索引命中契约。
+- 生产 76.6 亿行累计扫描规模：不在 CI 复现绝对数值，改用等价规模种子数据在真实 PostgreSQL 上验证索引命中契约。
+- `DELETE` 后堆文件物理收缩：不作为自动断言，仅在稳态行数口径中说明。
 
 ### 测试策略
 
-- 水位唯一性：源码级扫描禁止 `WorkerJob` 出现在调度到期判定查询中；集成测试构造 checkpoint 与终态 job 时间不一致数据，断言调度只服从 checkpoint 时间戳。
-- 索引命中：真实 PostgreSQL 构造万行级 `worker_jobs` 终态数据，对调度判定与 `prune_completed_jobs` 执行 `EXPLAIN`，断言无 `Seq Scan`。
-- 迁移与统计：验证新增 revision 升降级循环、重复 GIN 索引唯一性断言、批量导入后 `ANALYZE` 使 `n_live_tup` 与 `count(*)` 一致。
-- 队列生命周期：验证终态行与已发布行按新窗口回收，SSE 落后游标触发 `resync` 且邮件完整。
+- 水位唯一与状态机：源码级扫描禁止 `WorkerJob` 出现在调度到期判定查询中；构造 checkpoint 与终态 job 时间不一致、执行链成功/失败/跳过/续页/重试耗尽/取消、旧令牌回写、升级前后与重启恢复等场景，断言排期只服从水位列约定。
+- 计划适用边界：真实 PostgreSQL 构造万行级终态数据与代表性活跃数据，按生产调用形态（绑定参数的预编译语句）执行，断言通用计划下部分索引可用；分别记录到期判定不读终态与清理访问成本。
+- 回收资格：构造同一同步请求目标一支终态失败、另一支仍运行，强制回收后完成另一支，断言请求失败与错误码保持正确。
+- 交错回放：清理与实时分发、断线重放并发执行，断言事件连续或触发 `resync` 并收敛；覆盖未发布行保护、连续前缀与游标边界，不只测过期后重连。
+- 迁移与统计：验证新增 revision 升降级循环、重复 GIN 索引唯一性断言、大批量阈值触发后统计刷新与误差范围、短 delta 不触发 `ANALYZE`。
+- 积压排空：构造近 8 万终态行种子，断言单批上限、排空周期与稳态行数。
 
 ### 未知契约清单
 
@@ -80,25 +93,26 @@
 
 <!-- /规范 -->
 
-- 无。水位双源、索引残留位置、保留期常量与统计偏差均已在 2026-11-28 生产库与源码核实。
+- 无。水位双源、索引残留位置、保留期常量与统计偏差均已在 2026-11-28 生产库与源码核实；审阅指出缺口已在本规格中以显式裁决收口。
 
 ### 风险与回退
 
-- 风险：删除水位反推后若 checkpoint 时间戳更新存在漏写路径，调度会偏保守（重复同步）而非漏同步，须通过成功/失败双路径测试封死；DROP 索引迁移若遇并发入库需评估锁竞争；保留期缩短后 SSE 落后客户端触发 `resync`，须验证不丢邮件。
-- 回退：新增 Alembic revision 提供可逆 `downgrade` 重建索引；代码侧通过 revert 实现 commit 回退；生产部署前依赖标准封存备份。
+- 风险：删除水位反推后若结算事务漏写，调度会偏保守（重复同步）而非漏同步，须通过全路径测试封死；令牌约束漏判旧执行回写会掩盖新执行结果；回收资格判定过松会误结算同步请求；`outbox` 窗口下界不足会静默跨过事件；积压排空的单批上限过低会导致收敛过慢，过高则写入放大。
+- 回退：新增 Alembic revision 提供可逆 `downgrade` 重建索引并恢复水位列初值；代码侧通过 revert 实现 commit 回退；生产部署前依赖标准封存备份。
 
 ### 依赖与约束
 
 - 依赖：无前置未合并 task，基于当前 `main`（含 t093）立项；`review_level: full`。
-- 约束：遵循开发铁律删除水位反推路径与 7 天保留，不补反推索引、不留双源兼容层；迁移走 `.repo_template`/项目单一入口，TDD 先行；不写生产数据。
+- 写域协调：t094 拥有 Worker 周期调度与队列回收段（`worker/main.py` 调度/清理、`sync/jobs.py` 清理）及 `worker_jobs`/`outbox`/`message_search` 索引与迁移；t095 拥有 Worker 心跳、巡检、IDLE 与容量预算段及编排配置。两者共同更新 `docs/specs/mail_sync_and_storage.md`，按章节归属分工；建议顺序执行，t095 完成后补一条组合回归：断线后轮询回落、过期游标 `resync` 与嵌入 Worker 恢复同时成立。
+- 约束：遵循开发铁律删除水位反推路径与 7 天保留，不补反推索引、不留双源兼容层；水位语义、结算边界与回收资格按本规格裁决执行；迁移走项目单一入口，TDD 先行；不写生产数据。
 
 ### Finalization 时更新的 blueprint
 
-- `docs/blueprint/architecture.md`：更新同步水位权威模型与瞬态队列生命周期边界描述。
-- `docs/blueprint/domain.md`：更新 `SyncCheckpoint` 的水位时间戳语义。
+- `docs/blueprint/architecture.md`：更新同步水位权威模型、瞬态队列生命周期与回收资格边界描述。
+- `docs/blueprint/domain.md`：更新 `SyncCheckpoint` 的水位时间戳语义与执行链结算状态转换。
 - `docs/blueprint/conventions.md`：确立「状态属检查点、过程属队列」的职责边界与索引唯一性契约。
-- `docs/blueprint/decisions/20261128_watermark_authority_and_queue_retention.md`：记录删除反推路径与瞬态队列保留契约的架构决策。
-- `docs/blueprint/testing.md`：记录新增 `EXPLAIN` 索引命中与重复索引唯一性断言门禁。
+- `docs/blueprint/decisions/20261128_watermark_authority_and_queue_retention.md`：记录删除反推路径、水位结算语义与瞬态队列保留契约的架构决策。
+- `docs/blueprint/testing.md`：记录计划适用边界、回收资格与交错回放、统计误差的门禁覆盖要求。
 
 ______________________________________________________________________
 
