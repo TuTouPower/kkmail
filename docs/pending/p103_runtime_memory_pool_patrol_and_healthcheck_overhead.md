@@ -1,7 +1,10 @@
 ---
 pid: "p103"
 slug: "runtime_memory_pool_patrol_and_healthcheck_overhead"
-status: "todo"
+status: "closed"
+resolution: "transferred"
+reason: "2026-11-28 核实熔断状态机被局部 dict 旁路、阻塞 IDLE 与 ORM 探针仍在，按开发铁律以根因重构方案转交 t095"
+fix_ref: "t095"
 ---
 # p103 运行时内存收敛、单进程嵌入模式、连接池与 PG 调优及巡检健康检查减负
 
@@ -23,4 +26,4 @@ status: "todo"
         - `docker-compose.mail-core.yml:183-187` 每 `10s` 执行 `python -m mail_core.worker.healthcheck`，每次冷启动一个全新 Python 3.13 解释器、导入 SQLAlchemy/psycopg 并建连查库（每天冷启动 **8,640 次**）。
         - `docker-compose.mail-core.yml:150-153` 每 `5s` 执行 `curl -fsS http://127.0.0.1:8000/ready`，而 `src/mail_core/api/app.py:210-245` 每次调用打开两个未显式提交的只读 ORM Session，关闭时向 PG 发送 `ROLLBACK`（实测 `pg_stat_activity` 满屏 `ROLLBACK`，全库累计 `xact_rollback = 232,762` 次），且 PG 自身也每 `3s` 跑 `pg_isready`。
         - 方案：API `/ready` 内的只读探针改用 `AUTOCOMMIT` 轻量查询并做短 TTL（如 `5s`）内存缓存；Worker 健康探针改为由常驻心跳线程原子刷新 `/tmp`（tmpfs）本地存活戳文件、探针仅校验文件新近度而不再冷启数据库连接；将 `postgres` / `api` / `worker` 的 Docker `healthcheck.interval` 统一放宽至 `30s`。
-- 处理：未开
+- 处理：t095；resolution=transferred；reason=2026-11-28 核实熔断状态机被局部 dict 旁路、阻塞 IDLE 与 ORM 探针仍在，按开发铁律以根因重构方案转交 t095

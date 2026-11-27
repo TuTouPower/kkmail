@@ -1,7 +1,10 @@
 ---
 pid: "p102"
 slug: "worker_jobs_seq_scan_storm_and_search_index_bloat"
-status: "todo"
+status: "closed"
+resolution: "transferred"
+reason: "2026-11-28 核实生产索引/水位双源/保留期事实仍成立，按开发铁律以删除反推路径方案转交 t094"
+fix_ref: "t094"
 ---
 # p102 worker_jobs 缺索引引发全表扫描风暴、队列长保留膨胀与冗余全文索引
 
@@ -34,4 +37,4 @@ status: "todo"
         - `pg_stat_database`：`xact_commit=924433, xact_rollback=232762, blks_read=3391027, blks_hit=584219727, tup_returned=7664397699, tup_fetched=210525976`；
         - `pg_stat_user_tables`：`worker_jobs (n_live_tup=79396, n_dead_tup=8664, seq_scan=84199, total_size=96 MB)`，`outbox (n_live_tup=86336, n_dead_tup=16251, total_size=72 MB)`，`message_search (total_size=208 MB, n_live_tup=68, 实际 count(*)=22095)`；
         - `\d+ message_search` 与 `pg_stat_user_indexes` 确认 `ix_message_search_from_trgm` (`idx_scan=0`, `7840 kB`) 与 `ix_message_search_from_text_trgm` (`idx_scan=12`, `7840 kB`) 完全同构。
-- 处理：未开
+- 处理：t094；resolution=transferred；reason=2026-11-28 核实生产索引/水位双源/保留期事实仍成立，按开发铁律以删除反推路径方案转交 t094
