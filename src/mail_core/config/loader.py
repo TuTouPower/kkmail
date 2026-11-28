@@ -46,6 +46,25 @@ def is_sidecar_enabled(env: Mapping[str, str] | None = None) -> bool:
     return _parse_bool(source.get("KKMAIL_SIDECAR"), False)
 
 
+def resolve_embedded_worker(
+    source: Mapping[str, str] | None = None, *, cli_no_worker: bool = False
+) -> bool:
+    """Effective embedded-worker mode — the single rule shared by startup and readiness (t098).
+
+    The CLI ``--no-worker`` flag wins over the environment; otherwise the
+    worker is embedded unless ``MAIL_CORE_EMBEDDED_WORKER`` is exactly ``"0"``.
+    ``python -m mail_core`` resolves this once at the startup boundary and
+    publishes the result back into the environment, so the worker-thread
+    decision, the loaded config and the ``/ready`` probe all observe the same
+    mode. Direct ASGI startup and the standalone worker keep using the
+    environment entry unchanged.
+    """
+    if cli_no_worker:
+        return False
+    env = os.environ if source is None else source
+    return env.get("MAIL_CORE_EMBEDDED_WORKER") != "0"
+
+
 def _load_outbound_network_fields(source: Mapping[str, str]) -> dict[str, Any]:
     no_proxy = next(
         (source[k].strip() for k in ("MAIL_CORE_NO_PROXY", "NO_PROXY", "no_proxy") if (source.get(k) or "").strip()),
@@ -103,7 +122,7 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
             source.get("MAIL_CORE_ARCHIVE_RECENT_DAYS"), 30, "archive_recent_days"
         ),
         archive_batch_size=_parse_int(source.get("MAIL_CORE_ARCHIVE_BATCH"), 20, "archive_batch_size"),
-        embedded_worker=source.get("MAIL_CORE_EMBEDDED_WORKER") != "0",
+        embedded_worker=resolve_embedded_worker(source),
         worker_id=source.get("MAIL_CORE_WORKER_ID") or None,
         worker_poll_s=_parse_float(source.get("MAIL_CORE_WORKER_POLL_S"), 2.0, "worker_poll_s"),
         worker_max_idle_s=_parse_float(source.get("MAIL_CORE_WORKER_MAX_IDLE_S"), 10.0, "worker_max_idle_s"),

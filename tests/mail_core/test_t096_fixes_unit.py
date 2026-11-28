@@ -7,7 +7,6 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 
 from mail_core import liveness, runtime_budget
 from mail_core.config.loader import load_config

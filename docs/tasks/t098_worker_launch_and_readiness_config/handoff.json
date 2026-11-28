@@ -1,0 +1,17 @@
+{
+  "tid": "t098",
+  "attempt": 1,
+  "execution_id": "c03d2397dd4847798a34e91f6422baad",
+  "status": "done",
+  "branch": "t098_worker_launch_and_readiness_config",
+  "base_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "spec_source_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "tests": "flock 串行全量门禁（2026-11-29）：后端 unit 全量 1775 passed / 3 failed / 646 skipped，3 条失败与未改动 main 基线逐条一致（test_blob_permissions、test_system_health、test_t093 public surface，云端环境既存）；t098 新增 13 项与 t095/t096/a294/api_health 相关集合 45 passed / 4 skipped（PG 门控跳过）；模板契约（Python 3.14 venv）359 passed / 30 failed / 1 skipped，与 main 基线数字完全一致；前端 npm test 56 文件 599 passed、tsc -b 与生产 build 均 exit 0；桌面 npm test 因 electron 未安装失败（main 基线同）；敏感文档扫描 38 文件 0 违规；doctor collect 390 项可收集、md_kx 在位",
+  "blackbox": "`npm --prefix src/frontend run test:e2e`（stubApi 快速 E2E）26 passed",
+  "review": "full 级两轮。Round 1（2026-11-29T00:37:39+08:00）code PASS 零 finding、test PASS 2 条 minor（t098_test_f001/f002），均已修；Round 2（2026-11-29T00:40:49+08:00）双轴 PASS 零 finding，两条 minor 确认闭环，AC-001..AC-004 全部 TICK-VALID，reviewed_scope: 9fe75e57bc375852",
+  "review_scope": "9fe75e57bc375852",
+  "pending": [
+    "p107"
+  ],
+  "findings": []
+}
