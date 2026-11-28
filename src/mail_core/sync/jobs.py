@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, exists, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from mail_core.mail.domain.enums import (
 )
 from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.mail.storage.models import (
+    SyncRequest,
     SyncRequestTarget,
     SyncRequestTargetJob,
     WorkerJob,
@@ -802,24 +803,41 @@ def prune_completed_jobs(
 ) -> int:
     """Delete terminal jobs past the retention window (t094 AC-003/007).
 
-    A terminal job whose sync-request target is still open is excluded: its
-    link may carry a failure that target re-aggregation still needs (a sibling
-    link can still be running). Deleting it early could flip a correctly-failed
-    request to success once the slow sibling completes. Only jobs whose links
-    belong exclusively to already-settled targets are reclaimable.
+    A terminal job whose sync-request target OR parent sync-request is still
+    open is excluded via correlated ``NOT EXISTS``: a failed target in a
+    multi-target request still needs its links/state protected while sibling
+    targets remain open. Only jobs whose links belong exclusively to already-
+    settled targets and settled parent requests are reclaimable.
     """
+    from mail_core.sync.execution import OPEN_LINK_STATES
+
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
-    open_target_link_jobs = select(SyncRequestTargetJob.job_id).join(
-        SyncRequestTarget,
-        SyncRequestTarget.id == SyncRequestTargetJob.target_id,
-    ).where(SyncRequestTarget.state.in_(("queued", "running")))
+    open_request_link = exists(
+        select(1)
+        .select_from(SyncRequestTargetJob)
+        .join(
+            SyncRequestTarget,
+            SyncRequestTarget.id == SyncRequestTargetJob.target_id,
+        )
+        .join(
+            SyncRequest,
+            SyncRequest.id == SyncRequestTarget.request_id,
+        )
+        .where(SyncRequestTargetJob.job_id == WorkerJob.id)
+        .where(
+            or_(
+                SyncRequestTarget.state.in_(OPEN_LINK_STATES),
+                SyncRequest.state.in_(OPEN_LINK_STATES),
+            )
+        )
+    )
     ids = list(
         session.scalars(
             select(WorkerJob.id)
             .where(WorkerJob.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]))
             .where(WorkerJob.updated_at < cutoff)
-            .where(WorkerJob.id.not_in(open_target_link_jobs))
+            .where(~open_request_link)
             .order_by(WorkerJob.updated_at.asc())
             .limit(max(1, int(limit)))
         ).all()

@@ -571,3 +571,304 @@ def test_ac002_rebuilding_folder_not_delta_eligible():
         acc_id, folder_id = acc.id, folder.id
     with Session() as session:
         assert schedule_periodic_inbox_sync(session, poll_interval_s=1200.0) == 0
+
+
+def test_ac003_prune_protects_failed_target_while_parent_request_open():
+    """Finding 1: a two-target request with A failed (>24h) and B open must
+    never prune A's jobs while parent SyncRequest is open, and settling B
+    must keep A failed and the parent request failed.
+    """
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.execution import refresh_requests
+
+    Session = get_session_factory()
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    with Session() as session:
+        acc, folder_a = _seed_account_with_inbox(session, prefix="f1a")
+        folder_b = Folder(
+            id=uuid.uuid4(),
+            account_id=acc.id,
+            remote_id=f"sent-{uuid.uuid4().hex[:6]}",
+            name="Sent",
+            role="sent",
+            remote_state=FolderRemoteState.ACTIVE.value,
+        )
+        session.add(folder_b)
+        session.flush()
+
+        req = SyncRequest(
+            id=uuid.uuid4(),
+            client_request_id=f"req-f1-{uuid.uuid4().hex[:8]}",
+            mode="delta",
+            trigger="manual",
+            state="running",
+            scope={},
+        )
+        session.add(req)
+        session.flush()
+
+        target_a = SyncRequestTarget(
+            id=uuid.uuid4(),
+            request_id=req.id,
+            account_id=acc.id,
+            folder_id=folder_a.id,
+            target_key=f"a:{folder_a.id}",
+            requested_generation=uuid.uuid4(),
+            state="failed",
+            error_code="job_failed",
+            safe_error="upstream failed",
+            finished_at=old,
+        )
+        target_b = SyncRequestTarget(
+            id=uuid.uuid4(),
+            request_id=req.id,
+            account_id=acc.id,
+            folder_id=folder_b.id,
+            target_key=f"b:{folder_b.id}",
+            requested_generation=uuid.uuid4(),
+            state="running",
+        )
+        session.add_all([target_a, target_b])
+        session.flush()
+
+        failed_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc.id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.FOREGROUND.value,
+            status=JobStatus.FAILED.value,
+            updated_at=old,
+            payload={"folder_id": str(folder_a.id)},
+        )
+        done_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc.id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.FOREGROUND.value,
+            status=JobStatus.DONE.value,
+            updated_at=datetime.now(timezone.utc),
+            payload={"folder_id": str(folder_a.id)},
+        )
+        claimed_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc.id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.FOREGROUND.value,
+            status=JobStatus.CLAIMED.value,
+            locked_by="w-f1",
+            payload={"folder_id": str(folder_b.id)},
+        )
+        session.add_all([failed_job, done_job, claimed_job])
+        session.flush()
+        session.add_all(
+            [
+                SyncRequestTargetJob(
+                    id=uuid.uuid4(),
+                    target_id=target_a.id,
+                    job_id=failed_job.id,
+                    status="failed",
+                    error_code="job_failed",
+                    safe_error="upstream failed",
+                ),
+                SyncRequestTargetJob(
+                    id=uuid.uuid4(),
+                    target_id=target_a.id,
+                    job_id=done_job.id,
+                    status="complete",
+                ),
+                SyncRequestTargetJob(
+                    id=uuid.uuid4(),
+                    target_id=target_b.id,
+                    job_id=claimed_job.id,
+                    status="running",
+                ),
+            ]
+        )
+        session.commit()
+        req_id = req.id
+        target_a_id, target_b_id = target_a.id, target_b.id
+        failed_job_id, claimed_job_id = failed_job.id, claimed_job.id
+
+    with Session() as session:
+        assert prune_completed_jobs(session) == 0
+        assert session.get(WorkerJob, failed_job_id) is not None
+
+    with Session() as session:
+        complete_job(
+            session,
+            session.get(WorkerJob, claimed_job_id),
+            worker_id="w-f1",
+            result={"status": "ok", "exhausted": True},
+        )
+        session.commit()
+
+    with Session() as session:
+        req = session.get(SyncRequest, req_id)
+        ta = session.get(SyncRequestTarget, target_a_id)
+        tb = session.get(SyncRequestTarget, target_b_id)
+        assert ta.state == "failed"
+        assert ta.error_code == "job_failed"
+        assert ta.safe_error == "upstream failed"
+        assert tb.state == "complete"
+        assert req.state == "failed"
+
+    # Once the parent request is terminal, old failed jobs become prunable, and
+    # a subsequent refresh must still preserve A's terminal failure state.
+    with Session() as session:
+        assert prune_completed_jobs(session) == 1
+        assert session.get(WorkerJob, failed_job_id) is None
+        refresh_requests(session, {req_id})
+        session.commit()
+
+    with Session() as session:
+        req = session.get(SyncRequest, req_id)
+        ta = session.get(SyncRequestTarget, target_a_id)
+        assert ta.state == "failed"
+        assert ta.error_code == "job_failed"
+        assert ta.safe_error == "upstream failed"
+        assert req.state == "failed"
+
+
+def test_ac003_refresh_requests_preserves_terminal_targets_and_allows_retry_reopen():
+    """Terminal target states without open links must not be overwritten by
+    link pruning/changes, while binding an open retry link re-opens the target.
+    """
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.execution import bind_target, refresh_requests
+
+    Session = get_session_factory()
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    with Session() as session:
+        acc, folder = _seed_account_with_inbox(session, prefix="termkeep")
+        req = SyncRequest(
+            id=uuid.uuid4(),
+            client_request_id=f"req-term-{uuid.uuid4().hex[:8]}",
+            mode="delta",
+            trigger="manual",
+            state="running",
+            scope={},
+        )
+        session.add(req)
+        session.flush()
+
+        preserved_targets = []
+        for idx, state in enumerate(("complete", "partial", "failed", "cancelled", "blocked")):
+            t = SyncRequestTarget(
+                id=uuid.uuid4(),
+                request_id=req.id,
+                account_id=acc.id,
+                folder_id=folder.id,
+                target_key=f"t:{idx}:{state}",
+                requested_generation=uuid.uuid4(),
+                state=state,
+                error_code=None if state == "complete" else f"err_{state}",
+                safe_error=None if state == "complete" else f"msg_{state}",
+                finished_at=old,
+            )
+            session.add(t)
+            session.flush()
+            done_job = WorkerJob(
+                id=uuid.uuid4(),
+                account_id=acc.id,
+                job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=ExecutionOrigin.FOREGROUND.value,
+                status=JobStatus.DONE.value,
+                payload={"folder_id": str(folder.id)},
+            )
+            session.add(done_job)
+            session.flush()
+            session.add(
+                SyncRequestTargetJob(
+                    id=uuid.uuid4(),
+                    target_id=t.id,
+                    job_id=done_job.id,
+                    status="complete",
+                )
+            )
+            preserved_targets.append((t.id, state))
+        session.commit()
+        req_id = req.id
+
+    with Session() as session:
+        refresh_requests(session, {req_id})
+        session.commit()
+
+    with Session() as session:
+        req = session.get(SyncRequest, req_id)
+        assert req.state == "failed"
+        for tid, state in preserved_targets:
+            t = session.get(SyncRequestTarget, tid)
+            assert t.state == state
+            assert t.finished_at == old
+            if state != "complete":
+                assert t.error_code == f"err_{state}"
+                assert t.safe_error == f"msg_{state}"
+
+    # Retry flow: a standalone failed target re-opened by bind_target with an
+    # open job must re-enter queued/running and then settle complete.
+    with Session() as session:
+        acc2, folder2 = _seed_account_with_inbox(session, prefix="retryflow")
+        req2 = SyncRequest(
+            id=uuid.uuid4(),
+            client_request_id=f"req-retry-{uuid.uuid4().hex[:8]}",
+            mode="delta",
+            trigger="manual",
+            state="failed",
+            scope={},
+            finished_at=old,
+        )
+        session.add(req2)
+        session.flush()
+        t_retry = SyncRequestTarget(
+            id=uuid.uuid4(),
+            request_id=req2.id,
+            account_id=acc2.id,
+            folder_id=folder2.id,
+            target_key=f"retry:{folder2.id}",
+            requested_generation=uuid.uuid4(),
+            state="failed",
+            error_code="job_failed",
+            safe_error="old failure",
+            finished_at=old,
+        )
+        retry_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc2.id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.FOREGROUND.value,
+            status=JobStatus.PENDING.value,
+            payload={"folder_id": str(folder2.id)},
+        )
+        session.add_all([t_retry, retry_job])
+        session.flush()
+        bind_target(session, target=t_retry, job=retry_job, status="queued")
+        refresh_requests(session, {req2.id})
+        session.commit()
+        acc2_id = acc2.id
+        req2_id, t_retry_id, retry_job_id = req2.id, t_retry.id, retry_job.id
+
+    with Session() as session:
+        assert session.get(SyncRequestTarget, t_retry_id).state in ("queued", "running")
+        assert session.get(SyncRequest, req2_id).state in ("queued", "running")
+        from mail_core.sync.jobs import claim_jobs
+
+        claimed = claim_jobs(
+            session,
+            worker_id="w-retry",
+            limit=1,
+            account_id=acc2_id,
+            job_types=[JobType.SYNC_FOLDER_DELTA.value],
+        )
+        assert [j.id for j in claimed] == [retry_job_id]
+        complete_job(
+            session,
+            claimed[0],
+            worker_id="w-retry",
+            result={"status": "ok", "exhausted": True},
+        )
+        session.commit()
+
+    with Session() as session:
+        assert session.get(SyncRequestTarget, t_retry_id).state == "complete"
+        assert session.get(SyncRequestTarget, t_retry_id).error_code is None
+        assert session.get(SyncRequest, req2_id).state == "complete"

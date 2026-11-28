@@ -33,7 +33,8 @@ from mail_core.mail.storage.models import (
 )
 
 OPEN_LINK_STATES = ("queued", "running")
-TERMINAL_TARGET_STATES = ("complete", "failed")
+_TERMINAL_FAILURE_STATES = ("partial", "failed", "cancelled", "blocked")
+TERMINAL_TARGET_STATES = ("complete", *_TERMINAL_FAILURE_STATES)
 
 BASELINE_REQUIRED_MESSAGE = (
     "Folder has no completed baseline scan; a full initialization scan is required before delta sync"
@@ -97,6 +98,11 @@ def bind_target(
         link.finished_at = None
         link.error_code = None
         link.safe_error = None
+    if target.state in TERMINAL_TARGET_STATES and status in OPEN_LINK_STATES:
+        target.state = "running" if status == "running" else "queued"
+        target.finished_at = None
+        target.error_code = None
+        target.safe_error = None
     session.flush()
     return link
 
@@ -171,8 +177,6 @@ def _aggregate_target(session: Session, target: SyncRequestTarget) -> None:
             .order_by(SyncRequestTargetJob.created_at, SyncRequestTargetJob.id)
         ).all()
     )
-    if not links:
-        return
     if any(link.status in OPEN_LINK_STATES for link in links):
         target.state = (
             "running"
@@ -180,6 +184,12 @@ def _aggregate_target(session: Session, target: SyncRequestTarget) -> None:
             else "queued"
         )
         target.finished_at = None
+        target.error_code = None
+        target.safe_error = None
+        return
+    # Once a target is already terminal and has no open links, preserve its
+    # settled state and error details even if historical job links were pruned.
+    if target.state in TERMINAL_TARGET_STATES or not links:
         return
     failed = [link for link in links if link.status == "failed"]
     if failed:
@@ -222,8 +232,17 @@ def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None
         if not targets:
             continue
         if all(t.state in TERMINAL_TARGET_STATES for t in targets):
-            new_state = "failed" if any(t.state == "failed" for t in targets) else "complete"
-        elif any(t.state in ("running", "complete", "failed") for t in targets):
+            if req.state in _TERMINAL_FAILURE_STATES and any(
+                t.state in _TERMINAL_FAILURE_STATES for t in targets
+            ):
+                new_state = req.state
+            else:
+                new_state = (
+                    "failed"
+                    if any(t.state in _TERMINAL_FAILURE_STATES for t in targets)
+                    else "complete"
+                )
+        elif any(t.state in ("running", *TERMINAL_TARGET_STATES) for t in targets):
             new_state = "running"
         else:
             new_state = "queued"
