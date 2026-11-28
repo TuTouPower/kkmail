@@ -14,12 +14,7 @@ from mail_core import runtime_budget
 from mail_core.config.models import MailCoreConfig
 from mail_core.liveness import read_liveness_stamp, write_liveness_stamp
 from mail_core.readiness import ReadinessProbe
-from mail_core.sync.patrol import (
-    PATROL_COOLDOWN_S,
-    _cooldown_active,
-    _set_cooldown,
-)
-from mail_core.mail.storage.models import Account
+
 
 
 def test_single_runtime_budget_is_the_source_of_defaults():
@@ -62,22 +57,6 @@ def test_liveness_stamp_atomic_write_and_read(tmp_path):
     assert stamp["progress"] == 42
     assert stamp["worker_id"] == "w-1"
     assert read_liveness_stamp(tmp_path / "missing.json") is None
-
-
-def test_patrol_cooldown_lifecycle():
-    """AC-004: a failed account holds a cross-round cooldown in account.config."""
-    acc = Account(
-        id=__import__("uuid").uuid4(),
-        email="patrol-cool@example.com",
-        provider="stub",
-        credential_ref="ref",
-        config={},
-    )
-    now = datetime.now(timezone.utc)
-    assert _cooldown_active(acc, now) is False
-    _set_cooldown(acc, now)
-    assert _cooldown_active(acc, now) is True
-    assert _cooldown_active(acc, now + timedelta(seconds=PATROL_COOLDOWN_S + 1)) is False
 
 
 def test_healthcheck_uses_stamp_not_db(monkeypatch, tmp_path):

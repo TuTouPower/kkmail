@@ -114,6 +114,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 2. **全文件夹 STATUS 周期巡检与状态彻底隔离 (A14)**：
     - Worker 调度周期内对全部非收件箱、可同步物理目录（`kind="container"`、`selectable=True`、`remote_state="active"`）做短连接 STATUS 探测（IMAP STATUS 不 SELECT 不 FETCH；Graph 以文件夹计数接口探测），探测连接走任务槽位预算；
     - 探测基线与巡检时钟独立存储于 `FolderPatrolStatus` 模型（`folder_patrol_status` 表），与 `SyncCheckpoint.cursor` 协议同步游标彻底解耦分离，随文件夹级联删除；仅在文件夹全量扫描已完成（`SyncCheckpoint.full_scan_complete`）且具备基线时参与变化判定，UIDVALIDITY 重建或未完成全量扫描时不触发 delta 入队；
+    - 账号级巡检运行状态（冷却与半开租约）独立存储于 `AccountPatrolState` 模型（`account_patrol_state` 表，随账号级联删除）：冷却不再寄居 `Account.config`，半开租约以唯一标识 fencing 结算，存量旧键由迁移 `20261129_0009` 搬入新表；Provider 构建失败与目录探测失败分别在账号级与目录级记账（t097）；
     - 仅双方均有值的维度参与变化判定，无变化零入队，变化才以 `priority = 75` 入队 delta；单轮上限与最久未探测轮转治理规模，单夹失败隔离不影响其余文件夹；
     - 集中配置提供 IDLE 与巡检两个独立开关，两者都关即回到 t057 现状。
 

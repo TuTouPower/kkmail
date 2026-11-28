@@ -3,6 +3,7 @@
 from mail_core.mail.storage.models import (
     Account,
     AccountGroup,
+    AccountPatrolState,
     AccountSyncActivity,
     AccountSyncLease,
     AppSetting,
@@ -38,6 +39,7 @@ from mail_core.mail.storage.models import (
 __all__ = [
     "Account",
     "AccountGroup",
+    "AccountPatrolState",
     "AccountSyncActivity",
     "AccountSyncLease",
     "AppSetting",

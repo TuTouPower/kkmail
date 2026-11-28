@@ -27,6 +27,7 @@ from mail_core.mail.domain.enums import (
 )
 from mail_core.mail.storage.models import (
     Account,
+    AccountPatrolState,
     Folder,
     FolderPatrolStatus,
     SyncCheckpoint,
@@ -171,7 +172,10 @@ def test_patrol_releases_transaction_during_probe_and_preserves_concurrent_confi
     with Session() as session:
         acc_row = session.get(Account, acc_id)
         assert acc_row.connectivity_state == ConnectivityState.CONNECTED.value
-        assert "patrol_cooldown_until" in acc_row.config
+        # t097: the cooldown lives in account_patrol_state, never in config.
+        assert "patrol_cooldown_until" not in acc_row.config
+        patrol_state = session.get(AccountPatrolState, acc_id)
+        assert patrol_state is not None and patrol_state.cooldown_until is not None
         assert acc_row.config["outbound_proxy"] == "socks5://127.0.0.1:1090"
         assert acc_row.config["concurrent_fg_key"] == "keep-me"
         assert acc_row.config["sync_settings"] == {"days": 30}
@@ -234,6 +238,8 @@ def test_patrol_releases_transaction_during_probe_and_preserves_concurrent_confi
     with Session() as session:
         acc_row = session.get(Account, acc_id)
         assert "patrol_cooldown_until" not in acc_row.config
+        # t097: the lease holder's recovery success cleared the patrol state.
+        assert session.get(AccountPatrolState, acc_id) is None
         assert acc_row.config["outbound_proxy"] == "socks5://127.0.0.1:1090"
         assert acc_row.config["concurrent_fg_key"] == "keep-me"
         assert acc_row.config["sync_settings"] == {"days": 30}
@@ -246,14 +252,18 @@ def test_patrol_half_open_expired_cooldown_single_holder_across_workers(recovery
     """AC-004: two concurrent workers racing after cooldown expiry yield strictly one half-open probe."""
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
-    expired_iso = (now - timedelta(seconds=10)).isoformat()
+    expired_until = now - timedelta(seconds=10)
     with Session() as session:
         acc, _folders = _seed_patrol_account(
             session,
             roles=("sent",),
-            config={"patrol_cooldown_until": expired_iso, "keep": "yes"},
+            config={"keep": "yes"},
         )
         acc_id = acc.id
+        # t097: an expired cooldown lives in account_patrol_state.
+        session.add(
+            AccountPatrolState(account_id=acc_id, cooldown_until=expired_until)
+        )
         session.commit()
 
     entered_probe = threading.Event()
@@ -303,10 +313,13 @@ def test_patrol_half_open_expired_cooldown_single_holder_across_workers(recovery
     with Session() as session:
         acc_row = session.get(Account, acc_id)
         assert acc_row.config["keep"] == "yes"
+        assert "patrol_cooldown_until" not in acc_row.config
+        patrol_state = session.get(AccountPatrolState, acc_id)
         if recovery_succeeds:
-            assert "patrol_cooldown_until" not in acc_row.config
+            assert patrol_state is None
         else:
-            assert acc_row.config["patrol_cooldown_until"] != expired_iso
+            assert patrol_state is not None
+            assert patrol_state.cooldown_until != expired_until
 
 
 @_PG_SKIP
@@ -365,12 +378,15 @@ def test_patrol_auth_failure_invalidates_preserves_config_and_isolates_shared_en
         assert row_a.config["outbound_proxy"] == "http://proxy.local:8080"
         assert row_a.config["user_note"] == "preserve-on-auth-fail"
         assert "last_synced_at" in row_a.config
-        assert "patrol_cooldown_until" in row_a.config
+        # t097: cooldown is patrol state, not a config key.
+        assert "patrol_cooldown_until" not in row_a.config
+        assert session.get(AccountPatrolState, acc_a_id) is not None
 
         assert row_b.credential_state == CredentialState.VALID.value
         assert row_b.connectivity_state == ConnectivityState.CONNECTED.value
         assert row_b.sync_enabled is True
         assert "patrol_cooldown_until" not in (row_b.config or {})
+        assert session.get(AccountPatrolState, acc_b_id) is None
 
         fps_a = list(
             session.scalars(
@@ -435,6 +451,7 @@ def test_patrol_single_folder_unknown_error_does_not_short_circuit_account():
         assert row.credential_state == CredentialState.VALID.value
         assert row.connectivity_state == ConnectivityState.CONNECTED.value
         assert "patrol_cooldown_until" not in (row.config or {})
+        assert session.get(AccountPatrolState, acc_id) is None
         assert session.get(FolderPatrolStatus, sent_id).last_probe_failures == 1
         assert session.get(FolderPatrolStatus, trash_id).last_probe_failures == 0
 
@@ -473,6 +490,7 @@ def test_patrol_rate_limited_control_error_does_not_mark_unreachable_and_slows_r
         assert row.connectivity_state == ConnectivityState.CONNECTED.value
         assert row.credential_state == CredentialState.VALID.value
         assert "patrol_cooldown_until" not in (row.config or {})
+        assert session.get(AccountPatrolState, acc_id) is None
         fps_sent = session.get(FolderPatrolStatus, sent_id)
         assert fps_sent.last_probe_at == now
         assert fps_sent.last_probe_failures == 1
@@ -581,7 +599,8 @@ def test_patrol_caller_open_tx_compatibility_without_premature_commit():
         )
         assert res.failed == 1
         assert session.in_transaction() is True
-        assert "patrol_cooldown_until" in (session.get(Account, acc_id).config or {})
+        assert "patrol_cooldown_until" not in (session.get(Account, acc_id).config or {})
+        assert session.get(AccountPatrolState, acc_id) is not None
         assert session.get(FolderPatrolStatus, sent_id) is not None
         session.rollback()
 
