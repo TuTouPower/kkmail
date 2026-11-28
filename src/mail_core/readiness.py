@@ -135,7 +135,9 @@ def read_worker_active_via_core(engine: Any, *, stale_after_s: float = 60.0) -> 
     ) or (os.environ.get("MAIL_CORE_EMBEDDED_WORKER") != "0")
     if check_local_stamp:
         stamp = read_liveness_stamp()
-        if stamp is not None:
+        if not isinstance(stamp, dict):
+            active = False
+        else:
             try:
                 age = time.time() - Path(stamp_path()).stat().st_mtime
                 if age > stale_after_s:

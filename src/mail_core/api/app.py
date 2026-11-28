@@ -213,21 +213,32 @@ def ready():
     from fastapi.responses import JSONResponse
 
     from mail_core.mail.storage.health import get_current_schema_revision
+    from mail_core.readiness import get_readiness_probe, read_worker_active_via_core
     from mail_core.realtime.listener import get_outbox_listener
+
+    probe = get_readiness_probe()
+
+    def _invalidate_probe() -> None:
+        invalidate = getattr(probe, "invalidate", None)
+        if callable(invalidate):
+            invalidate()
 
     head = _code_schema_head()
     try:
         rev = get_current_schema_revision()
     except Exception as exc:
+        _invalidate_probe()
         body = ReadyOut(status="not_ready", schema_head=head, reason=f"database: {type(exc).__name__}")
         return JSONResponse(status_code=503, content=body.model_dump())
     listener = get_outbox_listener()
     # Thread alive-but-reconnecting is not ready; require a successful LISTEN.
     listener_ok = listener.listen_ready
     if rev != head:
+        _invalidate_probe()
         body = ReadyOut(status="not_ready", schema_revision=rev, schema_head=head, listener=listener_ok, reason="schema_out_of_date")
         return JSONResponse(status_code=503, content=body.model_dump())
     if not listener_ok:
+        _invalidate_probe()
         body = ReadyOut(status="not_ready", schema_revision=rev, schema_head=head, listener=False, reason="outbox_listener")
         return JSONResponse(status_code=503, content=body.model_dump())
 
@@ -237,9 +248,7 @@ def ready():
     worker_ok: bool | None = None
     try:
         from mail_core.db.session import get_engine
-        from mail_core.readiness import get_readiness_probe, read_worker_active_via_core
 
-        probe = get_readiness_probe()
         # Cache only the worker-derived signal; schema/listener stay fresh.
         worker_ok = probe.cached_worker_active()
         if worker_ok is None:
@@ -250,9 +259,11 @@ def ready():
                 worker_active=worker_ok,
             )
     except Exception:
+        _invalidate_probe()
         worker_ok = None
 
     if os.environ.get("MAIL_CORE_REQUIRE_WORKER_READY") == "1" and not worker_ok:
+        _invalidate_probe()
         body = ReadyOut(
             status="not_ready",
             schema_revision=rev,

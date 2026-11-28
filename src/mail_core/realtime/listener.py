@@ -16,6 +16,16 @@ log = logging.getLogger("mail_core.realtime.listener")
 _NOTIFY_WAIT_POLL_S = 0.5
 
 
+def _invalidate_readiness_probe() -> None:
+    """Clear the cached readiness snapshot on LISTEN disconnect or stop."""
+    try:
+        from mail_core.readiness import get_readiness_probe
+
+        get_readiness_probe().invalidate()
+    except Exception:
+        log.debug("failed to invalidate readiness probe on LISTEN transition", exc_info=True)
+
+
 def _normalize_listen_dsn(url: str) -> str:
     scheme, separator, rest = url.partition("://")
     if not separator or scheme.lower() not in {
@@ -94,6 +104,8 @@ class OutboxListenThread:
     def stop(self, timeout: float = 5.0) -> None:
         with self._lifecycle_lock:
             self._stop.set()
+            self._started.clear()
+            _invalidate_readiness_probe()
             thread = self._thread
         if thread:
             thread.join(timeout=timeout)
@@ -155,12 +167,16 @@ class OutboxListenThread:
                             log.exception("idle dispatch failed")
             except Exception as exc:
                 self._started.clear()
+                _invalidate_readiness_probe()
                 if self._stop.is_set():
                     break
                 # Type only: driver messages can embed DSN fragments / payloads.
                 log.warning("LISTEN loop error (%s); reconnecting in %ss", type(exc).__name__, self.reconnect_s)
                 self._stop.wait(self.reconnect_s)
             finally:
+                if self._stop.is_set():
+                    self._started.clear()
+                    _invalidate_readiness_probe()
                 if conn is not None:
                     try:
                         conn.close()
