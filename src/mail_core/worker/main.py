@@ -136,13 +136,13 @@ def _reclaim_once() -> int:
         ),
         (
             "prune_published",
-            lambda s: prune_published(s, older_than=timedelta(days=7), limit=5000),
+            lambda s: prune_published(s),
             "pruned %s published outbox row(s)",
             True,
         ),
         (
             "prune_completed_jobs",
-            lambda s: prune_completed_jobs(s, older_than=timedelta(days=7), limit=1000),
+            lambda s: prune_completed_jobs(s),
             "pruned %s completed/failed worker job(s)",
             True,
         ),
@@ -246,22 +246,22 @@ def schedule_periodic_inbox_sync(
         if in_flight is not None:
             continue
 
-        last_synced_at: datetime | None = None
+        # t094 AC-002: the checkpoint is the single authoritative watermark.
+        # Three-state first-scheduling contract:
+        #   * no checkpoint / full_scan_complete=False -> NOT delta-eligible;
+        #     the metadata discovery chain owns establishing the baseline.
+        #     Scheduling a delta here spins on baseline_required/pending with
+        #     nowhere to record a settlement.
+        #   * baseline ready, last_delta_settled_at NULL -> due now (first pass).
+        #   * baseline ready, watermark set -> due when the interval elapsed.
+        # NOTE: ``scan_generation`` is NOT a "rebuilding" flag — it persists
+        # after a tracked full scan completes; rebuilding is expressed by
+        # ``full_scan_complete=False`` (set by begin_scan_generation and
+        # invalidate_checkpoint_for_rebuild). Do not gate on it here.
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
-        if cp and cp.updated_at:
-            last_synced_at = cp.updated_at
-        latest_job_finished = session.scalar(
-            select(WorkerJob.updated_at)
-            .where(
-                WorkerJob.dedupe_key == dedupe_key,
-                WorkerJob.status.in_((JobStatus.DONE.value, JobStatus.FAILED.value)),
-                WorkerJob.updated_at.is_not(None),
-            )
-            .order_by(WorkerJob.updated_at.desc())
-            .limit(1)
-        )
-        if latest_job_finished and (last_synced_at is None or latest_job_finished > last_synced_at):
-            last_synced_at = latest_job_finished
+        if cp is None or not cp.full_scan_complete:
+            continue
+        last_synced_at = cp.last_delta_settled_at
 
         if last_synced_at is None or (current_time - last_synced_at).total_seconds() >= interval:
             overdue.append((folder_id, account_id))

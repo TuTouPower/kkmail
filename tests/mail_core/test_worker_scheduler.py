@@ -27,6 +27,7 @@ def _seed_account_with_inbox(
     sync_enabled: bool = True,
     folder_role: str = "inbox",
     remote_state: str = FolderRemoteState.ACTIVE.value,
+    baseline: bool = False,
 ) -> tuple[Account, Folder]:
     acc = Account(
         id=uuid.uuid4(),
@@ -48,21 +49,39 @@ def _seed_account_with_inbox(
     )
     session.add(folder)
     session.flush()
+    # t094: periodic delta scheduling requires a completed baseline checkpoint.
+    # Tests that expect a delta job to be scheduled must establish one.
+    if baseline:
+        session.add(
+            SyncCheckpoint(
+                account_id=acc.id,
+                folder_id=folder.id,
+                full_scan_complete=True,
+                last_delta_settled_at=None,
+            )
+        )
+        session.flush()
     return acc, folder
 
 
 def test_ac001_schedules_overdue_inbox():
+    """t094: watermark-driven scheduling (rewritten from updated_at-based).
+
+    The old test seeded ``updated_at=old_time`` and relied on the removed
+    dual-source fallback. Under the t094 contract the authoritative field is
+    ``last_delta_settled_at``, so this test now seeds that column directly.
+    """
     Session = get_session_factory()
     with Session() as session:
         acc, folder = _seed_account_with_inbox(session)
         acc_id, folder_id = acc.id, folder.id
-        # Checkpoint last synced 1500 seconds ago (> 1200s)
+        # Checkpoint last delta settled 1500 seconds ago (> 1200s)
         old_time = datetime.now(timezone.utc) - timedelta(seconds=1500)
         cp = SyncCheckpoint(
             account_id=acc_id,
             folder_id=folder_id,
             full_scan_complete=True,
-            updated_at=old_time,
+            last_delta_settled_at=old_time,
         )
         session.add(cp)
         session.commit()
@@ -85,6 +104,31 @@ def test_ac001_schedules_overdue_inbox():
         # WorkerJob.execution_origin column rather than JSON payload['background'].
         assert job.execution_origin == ExecutionOrigin.BACKGROUND.value
         assert job.payload == {"folder_id": str(folder_id)}
+
+
+def test_ac002_watermark_not_overdue_stays_quiet():
+    """A baseline-ready folder with a fresh watermark is not re-dispatched."""
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_account_with_inbox(session, email_prefix="freshwm")
+        acc_id, folder_id = acc.id, folder.id
+        session.add(
+            SyncCheckpoint(
+                account_id=acc_id,
+                folder_id=folder_id,
+                full_scan_complete=True,
+                last_delta_settled_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+            )
+        )
+        session.commit()
+    with Session() as session:
+        assert schedule_periodic_inbox_sync(session, poll_interval_s=1200.0) == 0
+        assert (
+            session.scalar(
+                select(WorkerJob).where(WorkerJob.dedupe_key == f"delta:{acc_id}:{folder_id}")
+            )
+            is None
+        )
 
 
 def test_ac001_ignores_disabled_accounts_and_paused_or_non_inbox_folders():
@@ -117,11 +161,19 @@ def test_ac001_ignores_disabled_accounts_and_paused_or_non_inbox_folders():
 
 
 def test_ac002_staggers_multiple_accounts():
+    """t094: rewritten to establish a completed baseline.
+
+    The old version seeded accounts without a checkpoint and expected a delta
+    job; under the t094 three-state contract a folder without a baseline is not
+    delta-eligible (the metadata chain owns baseline discovery), so the old
+    expectation was no longer valid. This test now verifies staggering for
+    baseline-ready folders with no prior delta (first pass due immediately).
+    """
     Session = get_session_factory()
     account_ids: list[uuid.UUID] = []
     with Session() as session:
         for i in range(5):
-            acc, folder = _seed_account_with_inbox(session, email_prefix=f"stagger{i}")
+            acc, folder = _seed_account_with_inbox(session, email_prefix=f"stagger{i}", baseline=True)
             account_ids.append(acc.id)
         session.commit()
 
@@ -153,9 +205,10 @@ def test_ac002_staggers_multiple_accounts():
 
 
 def test_ac006_deduplicates_in_flight_and_heals_after_terminal_failure():
+    """t094: rewritten to establish a baseline before asserting delta healing."""
     Session = get_session_factory()
     with Session() as session:
-        acc, folder = _seed_account_with_inbox(session)
+        acc, folder = _seed_account_with_inbox(session, baseline=True)
         acc_id, folder_id = acc.id, folder.id
         # 1. Simulate an in-flight PENDING job: scheduler must NOT duplicate it
         job_pending = WorkerJob(

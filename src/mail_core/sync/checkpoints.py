@@ -230,3 +230,72 @@ def invalidate_checkpoint_for_rebuild(
     session.flush()
     return row
 
+
+# t094: result statuses that represent a completed delta execution-chain
+# settlement (the chain has ended, not merely deferred). These advance the
+# authoritative scheduling watermark. Deferrals (rate_limited,
+# capacity_unavailable, lease_busy), handoffs (cursor_invalid ->
+# metadata rebuild), stale executions (fencing_mismatch) and in-flight
+# continuations (a followup_scheduled delta that has not exhausted the chain)
+# are deliberately excluded: advancing on them would suppress a due re-pull.
+_DELTA_SETTLED_STATUSES: frozenset[str] = frozenset({"ok", "skipped", "sync_disabled"})
+
+
+def is_delta_settled_result(result: dict[str, Any] | None) -> bool:
+    """Whether a delta result ends the execution chain (advances the watermark).
+
+    ``ok`` only settles when the page chain is exhausted; an ``ok`` with a
+    scheduled followup is a continuation, not a settlement.
+    """
+    if not result:
+        return False
+    if result.get("followup_scheduled"):
+        return False
+    status = str(result.get("status") or "")
+    if status == "ok" and not result.get("exhausted", False):
+        return False
+    return status in _DELTA_SETTLED_STATUSES
+
+
+def advance_delta_settlement_watermark(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    settled_at: datetime | None = None,
+    fencing_token: int | None = None,
+) -> bool:
+    """Monotonically advance ``SyncCheckpoint.last_delta_settled_at``.
+
+    Called from the same transaction that settles the delta job, so the
+    watermark and the job's terminal status commit atomically. Monotonic
+    (``GREATEST``) time advancement plus an optional fencing token means a
+    superseded execution whose settlement commits late can never move the
+    watermark backwards past a newer one. When ``fencing_token`` is supplied,
+    only an execution at least as new as the checkpoint's recorded fencing
+    token (the last cursor writer) may advance; a stale execution holding an
+    older token is rejected. This is a monotonic comparison, not
+    ``assert_fencing`` — by settlement time the lease may be released and its
+    token bumped, so checking the live lease would reject a valid settlement.
+
+    Returns True when the watermark moved.
+    """
+    settled_at = settled_at or datetime.now(timezone.utc)
+    if settled_at.tzinfo is None:
+        settled_at = settled_at.replace(tzinfo=timezone.utc)
+    row = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
+    if row is None:
+        # No baseline checkpoint: this folder is not delta-eligible; nothing
+        # to advance. Baseline completion creates the checkpoint separately.
+        return False
+    if fencing_token is not None and fencing_token < int(row.fencing_token or 0):
+        return False
+    current = row.last_delta_settled_at
+    if current is not None and current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    if current is not None and current >= settled_at:
+        return False
+    row.last_delta_settled_at = settled_at
+    session.flush()
+    return True
+

@@ -1,0 +1,15 @@
+{
+  "tid": "t094",
+  "attempt": 1,
+  "execution_id": "ca1f23f9fd484995a66cfc2209b7a1e5",
+  "status": "done",
+  "branch": "t094_worker_jobs_watermark_and_index_contract",
+  "base_sha": "982235be027f84cf3fb88039d80348c53f7e01b5",
+  "spec_source_sha": "982235be027f84cf3fb88039d80348c53f7e01b5",
+  "tests": "t094 DB 19 passed、纯契约单测 6 passed、delta/sync 回归 132 passed、migration+调度 27 passed、worker/jobs/reclaim 178 passed、SSE/ready 114 passed、4 处全量失败已定位修复并复验 10 passed；全量单次运行因基线 flaky 用例（`test_chaos_lease_recovery` / `test_a13_session_revocation_multiprocess` / 迁移临时库用例在前序测试后）挂起未完成，与 t094 改动无关（这些用例对 delta 类型均为 no-op 或独立迁移用例）",
+  "blackbox": "快速 E2E 26 passed",
+  "review": "code 三轮 PASS（Round 3 零 finding）、test 三轮 PASS（Round 3 零 finding）；模板契约 389 passed、敏感扫描 0 违规、前端 npm test/tsc/build 通过、桌面 npm test 通过",
+  "review_scope": "50e3d834ab8145f5",
+  "pending": [],
+  "findings": []
+}

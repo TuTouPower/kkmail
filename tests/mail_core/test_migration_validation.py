@@ -365,7 +365,11 @@ def test_orm_schema_drift_and_negative_detection():
     search_idx = {i["name"] for i in inspect(engine).get_indexes("message_search")}
     assert "ix_message_search_account" in search_idx
     assert "ix_message_search_document" in search_idx
-    assert "ix_message_search_from_trgm" in search_idx
+    # t094: the historical duplicate ``ix_message_search_from_trgm`` was dropped
+    # (it was equivalent to ``from_text_trgm`` and doubled trigram write cost).
+    # The canonical ORM-declared index must be the sole from_text GIN index.
+    assert "ix_message_search_from_text_trgm" in search_idx
+    assert "ix_message_search_from_trgm" not in search_idx
     assert "ix_message_search_subject_trgm" in search_idx
 
     rem_idx = {i["name"] for i in inspect(engine).get_indexes("remote_operations")}
@@ -375,7 +379,7 @@ def test_orm_schema_drift_and_negative_detection():
         "document",
         "ix_message_search_account",
         "ix_message_search_document",
-        "ix_message_search_from_trgm",
+        "ix_message_search_from_text_trgm",
         "ix_message_search_subject_trgm",
         "ix_remote_operations_retry",
     }
