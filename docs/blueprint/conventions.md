@@ -267,9 +267,10 @@ Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail
 ## 十四、 单机运行时、探针与提交耐久性约定 (t095)
 
 1. **单一并发预算**：DB 连接池、IDLE 配额与 Worker 执行槽位的默认值只由 `mail_core/runtime_budget.py` 派生，禁止在多模块重复硬编码；数据面连接池默认 `DEFAULT_DB_POOL_SIZE = 4`、`DEFAULT_DB_MAX_OVERFLOW = 4`（共 8 条），加 `LISTEN` 直连（Outbox 与 Job 唤醒各 1 条，共 2 条）与维护/迁移余量（6 条）组成 `MAX_CLIENT_CONNECTIONS = 16`；另加控制面 `DedicatedSlotPermitFactory` 每持有 1 个全局槽位独立占用的 `pg_try_advisory_lock` 连接（`DEFAULT_TOTAL_SLOTS = 8`），单进程嵌入式最坏连接峰值为 `24`，稳妥落在 Compose PostgreSQL `max_connections = 40` 上限内；IDLE 配额默认 8（线程上界 `2 × 8 = 16`）。
-2. **探针与业务读分离**：`/ready` 的 DB、schema、LISTEN、Worker 就绪读取一律走 Core Connection（`AUTOCOMMIT`），禁止打开 ORM Session（避免每次探针发送 `ROLLBACK`）；只缓存 worker 派生信号（短 TTL），DB/schema/LISTEN 每次读新值；嵌入式模式（`MAIL_CORE_EMBEDDED_WORKER != "0"`）或显式配置 `MAIL_CORE_LIVENESS_STAMP` 时，本地存活戳缺失、不可读、损坏或过期均判定 worker 未就绪，分布式未配置显式戳时保持数据库心跳判定；`/ready` 任意失败早返回及 `OutboxListenThread` 断开/停止时必须立即调用 `get_readiness_probe().invalidate()` 清除缓存，防止跨故障恢复沿用旧状态；容器存活性由 Worker 主循环刷新的 tmpfs 戳文件判定，探针不冷启解释器查库。
-3. **巡检账号级门禁**：全夹巡检的账号级短路与跨轮冷却由 `account.config` 的 patrol 冷却状态持有，与 `connectivity_state` 正交；后台传输失败继续隔离（t090），不污染账号健康展示；永久认证失败走凭据状态；单目录错误只影响该目录；共享端点上其他账号不受牵连。
-4. **提交耐久性白名单**：仅独立心跳等可丢弃状态允许异步提交；邮件入库、checkpoint、Outbox、同步请求结算及带远端副作用的业务事务必须同步提交；禁止用 `synchronous_commit=off` 代替检查点调优。
+2. **探针与业务读分离**：`/ready` 的 DB、schema、LISTEN、Worker 就绪读取一律走 Core Connection（`AUTOCOMMIT`），禁止打开 ORM Session（避免每次探针发送 `ROLLBACK`）；只缓存 worker 派生信号（短 TTL），DB/schema/LISTEN 每次读新值；嵌入式模式（`MAIL_CORE_EMBEDDED_WORKER != "0"`）或显式配置 `MAIL_CORE_LIVENESS_STAMP` 时，本地存活戳缺失、不可读、损坏或过期均判定 worker 未就绪，分布式未配置显式戳时保持数据库心跳判定；`/ready` 任意失败早返回及 `OutboxListenThread` 断开/停止时必须立即调用 `get_readiness_probe().invalidate()` 清除缓存，防止跨故障恢复沿用旧状态；容器存活性由 Worker 主循环刷新的 `/tmp` tmpfs 戳文件判定，探针不冷启解释器查库，写入异常限频记入 warning；`WorkerHeartbeatLoop` 主循环看门狗超时（`MAIL_CORE_WORKER_WATCHDOG_TIMEOUT`）时主动非零退出，交由 `restart: unless-stopped` 自动重启，其他持久 `unhealthy` 场景由外部编排/systemd/运维负责。
+3. **单机默认编排互斥边界**：`docker-compose.embedded.yml` 与 `docker-compose.mail-core.yml` 固定 `container_name`、`5433`/`37281` 宿主端口及共用数据卷名不做环境变量参数化；分布式 `api` 硬编码锁死 `MAIL_CORE_EMBEDDED_WORKER="0"` 与 `MAIL_CORE_SKIP_MIGRATIONS="1"`，禁止通过环境变量同库双启 Worker；部署脚本先构建后仅摘除冲突计算容器，保留 PostgreSQL 数据卷。
+4. **巡检账号级门禁与半开真探活**：全夹巡检在无调用方外层事务时不跨网络探测持有 DB 事务，冷却键写入走 PostgreSQL JSONB 原子更新并先抢占跨进程半开租约，不覆盖并发提交的其他 `Account.config` 字段；全夹巡检的冷却与 `connectivity_state` 正交；后台传输失败继续隔离（t090）；永久认证失败走凭据状态；单目录错误只影响该目录；共享端点上其他账号不受牵连；`Worker` 周期巡检对满 15 分钟窗口的 `UNREACHABLE` 账号在无事务下发起轻量半开真探活并按结果直收 `CONNECTED`/`INVALID`/刷新 `UNREACHABLE`，消除仅 INBOX 或无基线账号黑洞。
+5. **提交耐久性白名单**：仅独立心跳等可丢弃状态允许异步提交；邮件入库、checkpoint、Outbox、同步请求结算及带远端副作用的业务事务必须同步提交；禁止用 `synchronous_commit=off` 代替检查点调优。
 
 ## 十五、 同步水位单一权威与瞬态队列约定 (t094)
 
