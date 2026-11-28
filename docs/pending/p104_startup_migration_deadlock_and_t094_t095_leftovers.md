@@ -1,7 +1,10 @@
 ---
 pid: "p104"
 slug: "startup_migration_deadlock_and_t094_t095_leftovers"
-status: "todo"
+status: "closed"
+resolution: "transferred"
+reason: "2026-11-28 实测核实死锁锁链与 t094/t095 遗留缺陷并转交 t096 修复验证"
+fix_ref: "t096"
 ---
 # p104 启动迁移自死锁、0007过期测试及t095预算巡检探针遗留缺陷
 
@@ -27,4 +30,4 @@ status: "todo"
     - `test_t095_patrol_readiness.py` 未断言被短路目录零 `FolderPatrolStatus` 写入；`test_t095_contract_unit.py` 只测 `MailCoreConfig()` dataclass，未测 `load_config({})` 全字段同源与 `IdleWatcherConfig()`；缺少 `/tmp` 残留戳对分布式/无戳模式 `/ready` 影响的验证。
 - 线索：
     - 2026-11-28 实测 `pg_stat_activity`：`pid 80428 (idle in transaction)` `SELECT attr.conrelid...` 阻塞 `pid 80430` `ALTER TABLE sync_checkpoints ADD COLUMN last_delta_settled_at`（`pg_locks` `AccessExclusiveLock granted=f, blockers={80428}`）；单独执行 `scripts/run-mail-core-tests.sh run -k test_t8_real_0030_legacy_shape_upgrades_via_startup --no-cov -vv` 25s 超时挂死；剩余 711 条 PG 用例 710 passed / 1 failed。
-- 处理：未开
+- 处理：t096；resolution=transferred；reason=2026-11-28 实测核实死锁锁链与 t094/t095 遗留缺陷并转交 t096 修复验证
