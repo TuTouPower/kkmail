@@ -6,6 +6,14 @@ from mail_core.db.session import DatabaseConfigError, _pool_kwargs
 
 
 def test_defaults(monkeypatch):
+    """t095: defaults derive from the single runtime budget (rewritten).
+
+    The old assertion pinned pool_size/max_overflow to 10/10; t095 converges
+    single-host defaults to 4/4 via ``runtime_budget``. The validation contract
+    (env parsing + named errors) below is unchanged.
+    """
+    from mail_core import runtime_budget
+
     for var in (
         "MAIL_CORE_DB_POOL_SIZE",
         "MAIL_CORE_DB_MAX_OVERFLOW",
@@ -14,8 +22,8 @@ def test_defaults(monkeypatch):
     ):
         monkeypatch.delenv(var, raising=False)
     kw = _pool_kwargs()
-    assert kw["pool_size"] == 10
-    assert kw["max_overflow"] == 10
+    assert kw["pool_size"] == runtime_budget.DEFAULT_DB_POOL_SIZE
+    assert kw["max_overflow"] == runtime_budget.DEFAULT_DB_MAX_OVERFLOW
     assert kw["pool_timeout"] == 30
     assert kw["pool_recycle"] == 1800
 

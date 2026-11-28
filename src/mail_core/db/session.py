@@ -10,6 +10,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from mail_core.db.events import install_session_wake_hooks
+from mail_core import runtime_budget
 
 install_session_wake_hooks(Session)
 
@@ -69,8 +70,8 @@ def _pool_timeout() -> float:
 def _pool_kwargs() -> dict:
     return {
         "pool_pre_ping": True,
-        "pool_size": _pool_int("MAIL_CORE_DB_POOL_SIZE", 10, minimum=1),
-        "max_overflow": _pool_int("MAIL_CORE_DB_MAX_OVERFLOW", 10, minimum=0),
+        "pool_size": _pool_int("MAIL_CORE_DB_POOL_SIZE", runtime_budget.DEFAULT_DB_POOL_SIZE, minimum=1),
+        "max_overflow": _pool_int("MAIL_CORE_DB_MAX_OVERFLOW", runtime_budget.DEFAULT_DB_MAX_OVERFLOW, minimum=0),
         "pool_timeout": _pool_timeout(),
         "pool_recycle": _pool_int("MAIL_CORE_DB_POOL_RECYCLE", 1800, minimum=0),
     }

@@ -263,3 +263,10 @@ Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail
 2. **代理策略与零凭据泄漏**：代理配置按 `proxy_mode="direct"` → 账号 `outbound_proxy` → `NO_PROXY` / `MAIL_CORE_NO_PROXY` → `MAIL_CORE_OUTBOUND_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY` → `ALL_PROXY` 解析（含小写环境变体）；支持 `http`/`https`/`socks5`/`socks5h`，`ProxyConfig` 与异常/日志仅暴露脱敏 `safe_key()`，禁止包含代理账号口令；`remote_image_proxy.py` 强制直连禁代理，维持既有 SSRF 零外泄边界。
 3. **两段式超时与双栈错误保留**：建连与代理/TLS 握手全程受共享 `connect_timeout`（默认 10s，单尝试 5s）约束，完成后才切换为 `io_timeout`（默认 60s）；多 IP 解析强制 IPv4 优先尝试，禁止本地无 IPv6 路由触发的 `ENETUNREACH` 覆盖先前的远端 `TimeoutError` 或对端拒绝错误。
 4. **端点熔断与槽位隔离**：`EndpointBulkhead` 按 `(proxy_safe_key, host, port)` 对连续建连期传输失败开启有界冷却窗口与单探针半开恢复；开启期间在 `ConnectionPermit` 申请前快速失败或立即释放，认证拒绝对话不计入熔断计数。
+
+## 十四、 单机运行时、探针与提交耐久性约定 (t095)
+
+1. **单一并发预算**：DB 连接池、IDLE 配额与 Worker 执行槽位的默认值只由 `mail_core/runtime_budget.py` 派生，禁止在多模块重复硬编码；单机默认 4/4 连接池、8 IDLE 配额，并为 Outbox/Job LISTEN 直连分别预留，总客户端连接上限不超过 `MAX_CLIENT_CONNECTIONS`。
+2. **探针与业务读分离**：`/ready` 的 DB、schema、LISTEN、Worker 就绪读取一律走 Core Connection，禁止打开 ORM Session（避免每次探针发送 `ROLLBACK`）；只缓存 worker 派生信号（短 TTL），DB/schema/LISTEN 每次读新值且断开立即失效；容器存活性由 Worker 主循环刷新的 tmpfs 戳文件判定，探针不冷启解释器查库。
+3. **巡检账号级门禁**：全夹巡检的账号级短路与跨轮冷却由 `account.config` 的 patrol 冷却状态持有，与 `connectivity_state` 正交；后台传输失败继续隔离（t090），不污染账号健康展示；永久认证失败走凭据状态；单目录错误只影响该目录；共享端点上其他账号不受牵连。
+4. **提交耐久性白名单**：仅独立心跳等可丢弃状态允许异步提交；邮件入库、checkpoint、Outbox、同步请求结算及带远端副作用的业务事务必须同步提交；禁止用 `synchronous_commit=off` 代替检查点调优。

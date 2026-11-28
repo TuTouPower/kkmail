@@ -8,11 +8,18 @@ from mail_core.config import ConfigError, MailCoreConfig, load_config
 
 
 def test_ac001_config_defaults():
+    """t095: pool/slot/IDLE defaults derive from the single runtime budget.
+
+    The old assertions pinned 10/10; t095 converges single-host defaults via
+    ``runtime_budget``. All other config defaults are unchanged.
+    """
+    from mail_core import runtime_budget
+
     cfg = load_config({})
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 8000
-    assert cfg.db_pool_size == 10
-    assert cfg.db_max_overflow == 10
+    assert cfg.db_pool_size == runtime_budget.DEFAULT_DB_POOL_SIZE
+    assert cfg.db_max_overflow == runtime_budget.DEFAULT_DB_MAX_OVERFLOW
     assert cfg.db_pool_timeout == 30.0
     assert cfg.db_pool_recycle == 1800
     assert cfg.total_slots == 8

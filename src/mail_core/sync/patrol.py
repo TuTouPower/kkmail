@@ -40,6 +40,33 @@ log = logging.getLogger("mail_core.sync.patrol")
 
 _DIMENSIONS = ("messages", "uidnext", "unseen", "highestmodseq")
 
+# t095 AC-004: account-level patrol cooldown. Held in account.config so it
+# survives across sweeps and processes, deliberately separate from
+# connectivity_state (t090 isolates background transport failures from account
+# health display). Only the single patrol sweeper advances it, so there is no
+# concurrent half-open probing.
+_CFG_PATROL_COOLDOWN = "patrol_cooldown_until"
+PATROL_COOLDOWN_S = 300.0
+
+
+def _cooldown_active(account: Account, now: datetime) -> bool:
+    raw = (account.config or {}).get(_CFG_PATROL_COOLDOWN)
+    if not raw:
+        return False
+    try:
+        until = datetime.fromisoformat(str(raw))
+    except (ValueError, TypeError):
+        return False
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    return now < until
+
+
+def _set_cooldown(account: Account, now: datetime) -> None:
+    cfg = dict(account.config or {})
+    cfg[_CFG_PATROL_COOLDOWN] = (now + __import__("datetime").timedelta(seconds=PATROL_COOLDOWN_S)).isoformat()
+    account.config = cfg
+
 
 @dataclass
 class PatrolConfig:
@@ -131,6 +158,11 @@ def schedule_folder_status_patrol(
 
     due: list[tuple[float, Folder, Account, SyncCheckpoint | None, FolderPatrolStatus | None]] = []
     for folder, account, cp, fps in rows:
+        # t095 AC-004: skip the whole account while its patrol cooldown is
+        # active (one failure must not hammer every folder of the account).
+        if _cooldown_active(account, current_time):
+            result.skipped_not_due += 1
+            continue
         last_epoch: float | None = None
         if fps is not None and fps.last_probe_at is not None:
             last_epoch = fps.last_probe_at.timestamp()
@@ -193,9 +225,28 @@ def schedule_folder_status_patrol(
         return fps
 
     providers: dict[uuid.UUID, Any] = {}
-    provider_errors: dict[uuid.UUID, Exception] = {}
+    # t095 AC-004: account-level short-circuit for THIS sweep. A transport or
+    # auth failure on one directory skips the account's remaining directories
+    # this round; a single-directory error does not. Cross-round cooldown is
+    # held in account.config (set below), a distinct authority from
+    # connectivity_state so t090 background isolation is preserved.
+    short_circuited: set[uuid.UUID] = set()
+
+    def _mark_account_failure(account: Account, exc: Exception) -> None:
+        from mail_core.accounts.health import mark_credential_invalid
+        from mail_core.mail.domain.failures import FailureDomain
+        from mail_core.sync.context import classify_failure
+
+        domain = classify_failure(exc).domain
+        if domain == FailureDomain.AUTH:
+            mark_credential_invalid(session, account.id)
+        # Background transport failures are isolated (t090): hold a
+        # patrol-only cooldown rather than polluting connectivity_state.
+        _set_cooldown(account, current_time)
+        short_circuited.add(account.id)
+
     for _epoch, folder, account, cp, fps in selected:
-        if account.id in provider_errors:
+        if account.id in short_circuited:
             _record_attempt(folder, fps, failed=True)
             result.failed += 1
             continue
@@ -211,7 +262,7 @@ def schedule_folder_status_patrol(
                     account.id,
                     safe_error(exc),
                 )
-                provider_errors[account.id] = exc
+                _mark_account_failure(account, exc)
                 _record_attempt(folder, fps, failed=True)
                 result.failed += 1
                 continue
@@ -228,6 +279,13 @@ def schedule_folder_status_patrol(
                 account.id,
                 safe_error(exc),
             )
+            classify = __import__("mail_core.sync.context", fromlist=["classify_failure"]).classify_failure(exc)
+            domain = classify.domain
+            domain_name = getattr(domain, "value", str(domain))
+            # Only transport/auth failures short-circuit the account. A
+            # per-directory error (CONTROL/UNKNOWN) is isolated to this folder.
+            if domain_name in ("transport", "auth"):
+                _mark_account_failure(account, exc)
             _record_attempt(folder, fps, failed=True)
             result.failed += 1
             continue

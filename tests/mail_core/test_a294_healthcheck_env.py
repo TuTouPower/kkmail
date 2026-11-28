@@ -1,9 +1,9 @@
-"""A294: healthcheck env parsing + sanitized error output.
+"""A294 + t095: healthcheck env parsing + sanitized error output.
 
-Old code parsed ``float(os.environ[...])`` *outside* the try block, so
-an invalid MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG crashed with a raw
-traceback, and the except branch printed the full exception message
-(DB errors can embed connection details) to stderr.
+The probe no longer queries PostgreSQL; it verifies the worker's filesystem
+liveness stamp. The env-parsing and error-sanitization contract (A294) is
+preserved: an invalid MAX_LAG returns 1 without a raw traceback, and an
+unexpected backend error never leaks its message to stderr.
 """
 
 from __future__ import annotations
@@ -17,15 +17,10 @@ from mail_core.worker.healthcheck import main as healthcheck_main
 
 
 @pytest.fixture(autouse=True)
-def _mock_session(monkeypatch):
-    mock_session = MagicMock()
-    monkeypatch.setattr(
-        "mail_core.worker.healthcheck.get_session_factory", lambda: lambda: mock_session
-    )
-    monkeypatch.setattr(
-        "mail_core.worker.healthcheck.get_worker_heartbeats",
-        lambda _session, **_kw: (True, 1.0, [{"worker_id": "w1", "active": True}]),
-    )
+def _mock_stamp(monkeypatch, tmp_path):
+    stamp_file = tmp_path / "liveness.json"
+    stamp_file.write_text('{"progress": 1, "worker_id": "w1", "v": 1}')
+    monkeypatch.setenv("MAIL_CORE_LIVENESS_STAMP", str(stamp_file))
     monkeypatch.delenv("MAIL_CORE_WORKER_ID", raising=False)
 
 
@@ -36,7 +31,6 @@ def test_invalid_max_lag_returns_1_without_traceback_or_raw_exc(monkeypatch, cap
     err = capsys.readouterr().err
     assert "Traceback" not in err
     assert "ValueError" in err
-    # Only the type name: the raw float() message must not be printed.
     assert "could not convert" not in err
 
 
@@ -48,10 +42,10 @@ def test_valid_max_lag_still_healthy(monkeypatch, capsys):
 def test_backend_error_prints_type_name_only(monkeypatch, capsys):
     secret_detail = "postgresql://user:hunter2@db.internal:5432/kkmail"
 
-    def boom(_session, **_kw):
+    def boom(*_args, **_kw):
         raise RuntimeError(f"connection failed: {secret_detail}")
 
-    monkeypatch.setattr("mail_core.worker.healthcheck.get_worker_heartbeats", boom)
+    monkeypatch.setattr("mail_core.worker.healthcheck.read_liveness_stamp", boom)
     monkeypatch.delenv("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG", raising=False)
     assert healthcheck_main() == 1
     err = capsys.readouterr().err

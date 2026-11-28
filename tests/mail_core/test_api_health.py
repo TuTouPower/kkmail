@@ -79,6 +79,10 @@ def _engine_with_revision(rev):
         def __exit__(self, *args):
             return False
 
+        # t095: /ready reads via AUTOCOMMIT Core connection.
+        def execution_options(self, **_kwargs):
+            return self
+
         def execute(self, *_a, **_k):
             return _Result(rev)
 

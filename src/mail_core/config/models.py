@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 
+from mail_core import runtime_budget
+
 
 class ConfigError(ValueError):
     """Raised when configuration validation fails."""
@@ -30,16 +32,16 @@ class MailCoreConfig:
     outbound_circuit_failure_threshold: int = 2
     outbound_circuit_cooldown_s: float = 30.0
 
-    # Database & Pool
+    # Database & Pool (t095: derived from the single runtime budget)
     database_url: str = ""
-    db_pool_size: int = 10
-    db_max_overflow: int = 10
+    db_pool_size: int = runtime_budget.DEFAULT_DB_POOL_SIZE
+    db_max_overflow: int = runtime_budget.DEFAULT_DB_MAX_OVERFLOW
     db_pool_timeout: float = 30.0
     db_pool_recycle: int = 1800
 
-    # Provider Connection Slots
-    total_slots: int = 8
-    background_start_slot: int = 2
+    # Provider Connection Slots (single runtime budget)
+    total_slots: int = runtime_budget.DEFAULT_TOTAL_SLOTS
+    background_start_slot: int = runtime_budget.DEFAULT_BACKGROUND_START_SLOT
     capacity_retry_seconds: float = 5.0
 
     # Mail & Storage Limits
@@ -62,7 +64,7 @@ class MailCoreConfig:
     # long-lived IDLE connections only; it never consumes the
     # connection_slots task budget above.
     idle_enabled: bool = True
-    idle_quota: int = 32
+    idle_quota: int = runtime_budget.DEFAULT_IDLE_QUOTA
     idle_max_duration_s: float = 1680.0
     idle_backoff_base_s: float = 5.0
     idle_backoff_max_s: float = 300.0

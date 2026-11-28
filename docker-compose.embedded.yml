@@ -1,0 +1,79 @@
+# Single-host default: API + embedded Worker in ONE Python process + PostgreSQL.
+# Mutually exclusive with the distributed stack; use a different compose file
+# so the two modes can never run at once (no shared service names, no port
+# clash). All commands must pass -f explicitly.
+#
+#   docker compose -f docker-compose.embedded.yml --env-file .env up --build -d
+# Secrets are never defaulted: the process refuses to start without them.
+
+services:
+  postgres:
+    image: postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+    container_name: kkmail-mail-core-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kkmail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: kkmail_mail
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - kkmail_mail_core_pg:/var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - max_connections=40
+      - -c
+      - checkpoint_timeout=15min
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kkmail -d kkmail_mail"]
+      interval: 30s
+      timeout: 3s
+      retries: 20
+
+  app:
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    build:
+      context: .
+      dockerfile: Dockerfile.mail-core
+    container_name: kkmail-mail-core-app
+    restart: unless-stopped
+    environment:
+      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
+      MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:37281"
+      MAIL_CORE_PUBLIC_ORIGIN: "${MAIL_CORE_PUBLIC_ORIGIN:-}"
+      MAIL_CORE_SECRET_KEY: ${MAIL_CORE_SECRET_KEY:?set MAIL_CORE_SECRET_KEY}
+      MAIL_CORE_LOGIN_PASSWORD_HASH: ${MAIL_CORE_LOGIN_PASSWORD_HASH:-}
+      MAIL_CORE_LOGIN_PASSWORD: ${MAIL_CORE_LOGIN_PASSWORD:-}
+      MAIL_CORE_API_KEYS: ${MAIL_CORE_API_KEYS:-}
+      MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1}
+      MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
+      MAIL_CORE_BLOB_ROOT: "/var/lib/kkmail/blobs"
+      MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY}
+      MAIL_CORE_WORKER_ID: "embedded-worker-1"
+      # Single process owns migrations and the embedded worker thread.
+      MAIL_CORE_SKIP_MIGRATIONS: "0"
+      MAIL_CORE_EMBEDDED_WORKER: "1"
+      MAIL_CORE_REQUIRE_WORKER_READY: "1"
+    ports:
+      - "${MAIL_CORE_HOST_BIND:-127.0.0.1}:37281:8000"
+    volumes:
+      - kkmail_mail_core_blobs:/var/lib/kkmail/blobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/ready || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 20
+    command: ["python", "-m", "mail_core", "--host", "0.0.0.0", "--port", "8000"]
+
+volumes:
+  kkmail_mail_core_pg:
+  kkmail_mail_core_blobs:
