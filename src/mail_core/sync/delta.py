@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, fields, replace
 from datetime import datetime, timedelta, timezone
 
@@ -375,6 +376,99 @@ def _reschedule_delta_after_fencing_mismatch(
     return followup.status == JobStatus.CLAIMED.value
 
 
+def _apply_page_to_session(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    worker_id: str,
+    fencing: int,
+    lease_ttl: timedelta,
+    page: DeltaPage,
+    totals: dict[str, int],
+) -> DeltaApplyResult:
+    """Apply one delta page, emit SYNC_PROGRESS, heartbeat lease, and refresh stats."""
+    result = apply_delta_page(
+        session,
+        account_id=account_id,
+        folder_id=folder_id,
+        fencing_token=fencing,
+        page=page,
+    )
+    session.add(
+        OutboxEvent(
+            event_type=OutboxEventType.SYNC_PROGRESS.value,
+            account_id=account_id,
+            payload={
+                "phase": SyncPhase.INCREMENTAL_READY.value,
+                "folder_id": str(folder_id),
+                "upserted": result.upserted,
+                "deleted": result.deleted,
+            },
+        )
+    )
+    heartbeat_lease(
+        session,
+        account_id=account_id,
+        owner_id=worker_id,
+        fencing_token=fencing,
+        ttl=lease_ttl,
+    )
+    # t094 AC-006: a data page has been applied in this transaction.
+    # Refresh message-table stats when the cumulative changed rows
+    # reach the bulk threshold, so a later page deferral (rate limit,
+    # capacity, fencing) cannot lose the refresh for already-written
+    # data. The helper's frequency cap keeps short deltas cheap.
+    _refresh_message_stats_if_bulk(
+        session,
+        totals.get("upserted", 0)
+        + totals.get("deleted", 0)
+        + result.upserted
+        + result.deleted,
+    )
+    return result
+
+
+def _finalize_delta_in_session(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    worker_id: str,
+    fencing: int,
+    origin: ExecutionOrigin,
+    priority: int,
+    request_id: uuid.UUID | None,
+    totals: dict[str, int],
+    exhausted: bool,
+) -> None:
+    """Verify fencing, enqueue followups/archive, refresh stats, and release lease."""
+    assert_fencing(session, account_id=account_id, fencing_token=fencing)
+    if totals.get("upserted", 0) > 0:
+        enqueue_job(
+            session,
+            job_type=JobType.ARCHIVE_MIME_BATCH.value,
+            execution_origin=ExecutionOrigin.BACKGROUND,
+            account_id=account_id,
+            priority=60,
+            dedupe_key=f"archive_mime_batch:{account_id}",
+        )
+    if not exhausted:
+        enqueue_job(
+            session,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=origin,
+            account_id=account_id,
+            payload=sync_request_payload(request_id, folder_id=str(folder_id)),
+            priority=priority,
+            dedupe_key=f"delta:{account_id}:{folder_id}",
+        )
+    _refresh_message_stats_if_bulk(
+        session, totals.get("upserted", 0) + totals.get("deleted", 0)
+    )
+    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+
+
 def sync_folder_delta(
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
@@ -388,6 +482,8 @@ def sync_folder_delta(
     traffic_class: TrafficClass = TrafficClass.FOREGROUND,
     priority: int = 60,
     request_id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
+    final_session: Session | None = None,
 ) -> dict:
     """Apply provider delta pages under fencing.
 
@@ -446,6 +542,18 @@ def sync_folder_delta(
                 "followup_coalesced": followup_coalesced,
             }
         fencing = lease.fencing_token
+        if hasattr(cp, "fencing_token"):
+            cp.fencing_token = max(int(getattr(cp, "fencing_token", 0) or 0), int(fencing))
+        if job_id is not None and hasattr(session, "scalar"):
+            from mail_core.mail.storage.models import WorkerJob
+
+            job_row = session.scalar(
+                select(WorkerJob).where(WorkerJob.id == job_id).with_for_update()
+            )
+            if job_row is not None:
+                job_payload = dict(job_row.payload or {})
+                job_payload["_fencing_token"] = int(fencing)
+                job_row.payload = job_payload
         remote_id = folder.remote_id
         cursor = dict(cp.cursor or {})
         if cp.modseq is not None and "modseq" not in cursor:
@@ -488,6 +596,36 @@ def sync_folder_delta(
     totals = {"upserted": 0, "deleted": 0, "flagged": 0}
     exhausted = False
     pages = 0
+    finalized = False
+
+    def _handle_fencing_loss(session: Session, *, commit: bool) -> dict:
+        session.rollback()
+        followup_coalesced = _reschedule_delta_after_fencing_mismatch(
+            session,
+            account_id=account_id,
+            folder_id=folder_id,
+            execution_origin=origin,
+            priority=priority,
+            request_id=request_id,
+        )
+        if commit:
+            session.commit()
+        return {
+            "status": "fencing_mismatch",
+            "followup_scheduled": True,
+            "followup_coalesced": followup_coalesced,
+            **totals,
+        }
+
+    def _rollback_and_release(work_session: Session, *, use_final: bool) -> None:
+        work_session.rollback()
+        if use_final:
+            with Session() as rel_session:
+                _release_quiet(rel_session)
+                rel_session.commit()
+        else:
+            _release_quiet(work_session)
+            work_session.commit()
 
     while pages < max_pages:
         try:
@@ -553,6 +691,7 @@ def sync_folder_delta(
             delay = float(exc.retry_after_seconds or 60)
             delay = max(1.0, min(delay, 86400.0))
             with Session() as session:
+                _release_quiet(session)
                 enqueue_job(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
@@ -563,7 +702,6 @@ def sync_folder_delta(
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
                 )
-                _release_quiet(session)
                 session.commit()
             return {"status": "rate_limited", "retry_after": delay, "pages": pages, **totals}
         except CAPACITY_ERRORS as exc:
@@ -571,6 +709,7 @@ def sync_folder_delta(
             # account failure marking (design §7).
             delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
             with Session() as session:
+                _release_quiet(session)
                 followup = enqueue_job(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
@@ -582,7 +721,6 @@ def sync_folder_delta(
                     dedupe_key=f"delta:{account_id}:{folder_id}",
                 )
                 followup_coalesced = followup.status == JobStatus.CLAIMED.value
-                _release_quiet(session)
                 session.commit()
             return {
                 "status": "capacity_unavailable",
@@ -607,147 +745,90 @@ def sync_folder_delta(
                 "failure": failure.to_dict(),
                 "error": err_summary,
                 "pages": pages,
+                "fencing_token": fencing,
                 **totals,
             }
             return result
 
-        with Session() as session:
+        # On the final page, apply_delta_page + archive enqueue + lease release
+        # share one transaction (and when called via a worker job, share the
+        # handler's final commit with complete_job + connectivity + watermark).
+        is_last_iteration = bool(getattr(page, "exhausted", False)) or (pages + 1 >= max_pages)
+        use_final_session = is_last_iteration and final_session is not None
+        ctx = nullcontext(final_session) if use_final_session else Session()
+        with ctx as work_session:
             try:
-                result = apply_delta_page(
-                    session,
+                result = _apply_page_to_session(
+                    work_session,
                     account_id=account_id,
                     folder_id=folder_id,
-                    fencing_token=fencing,
+                    worker_id=worker_id,
+                    fencing=fencing,
+                    lease_ttl=lease_ttl,
                     page=page,
+                    totals=totals,
                 )
-            except FencingMismatch:
-                session.rollback()
-                followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session,
-                    account_id=account_id,
-                    folder_id=folder_id,
-                    execution_origin=origin,
-                    priority=priority,
-                    request_id=request_id,
-                )
-                session.commit()
-                return {
-                    "status": "fencing_mismatch",
-                    "followup_scheduled": True,
-                    "followup_coalesced": followup_coalesced,
-                    **totals,
+                next_totals = {
+                    "upserted": totals["upserted"] + result.upserted,
+                    "deleted": totals["deleted"] + result.deleted,
+                    "flagged": totals["flagged"] + result.flagged,
                 }
+                next_pages = pages + 1
+                if result.exhausted or next_pages >= max_pages:
+                    _finalize_delta_in_session(
+                        work_session,
+                        account_id=account_id,
+                        folder_id=folder_id,
+                        worker_id=worker_id,
+                        fencing=fencing,
+                        origin=origin,
+                        priority=priority,
+                        request_id=request_id,
+                        totals=next_totals,
+                        exhausted=result.exhausted,
+                    )
+                    finalized = True
+                if not use_final_session:
+                    work_session.commit()
+            except FencingMismatch:
+                return _handle_fencing_loss(work_session, commit=not use_final_session)
             except Exception:
                 # A85: uncaught apply errors must not leak the lease until
                 # its TTL — release quietly (only while fencing is still
                 # ours) and let the error propagate.
-                session.rollback()
-                _release_quiet(session)
-                session.commit()
+                _rollback_and_release(work_session, use_final=use_final_session)
                 raise
-            session.add(
-                OutboxEvent(
-                    event_type=OutboxEventType.SYNC_PROGRESS.value,
-                    account_id=account_id,
-                    payload={
-                        "phase": SyncPhase.INCREMENTAL_READY.value,
-                        "folder_id": str(folder_id),
-                        "upserted": result.upserted,
-                        "deleted": result.deleted,
-                    },
-                )
-            )
-            try:
-                heartbeat_lease(
-                    session,
-                    account_id=account_id,
-                    owner_id=worker_id,
-                    fencing_token=fencing,
-                    ttl=lease_ttl,
-                )
-            except FencingMismatch:
-                session.rollback()
-                followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session,
-                    account_id=account_id,
-                    folder_id=folder_id,
-                    execution_origin=origin,
-                    priority=priority,
-                    request_id=request_id,
-                )
-                session.commit()
-                return {
-                    "status": "fencing_mismatch",
-                    "followup_scheduled": True,
-                    "followup_coalesced": followup_coalesced,
-                    **totals,
-                }
-            # t094 AC-006: a data page has been applied in this transaction.
-            # Refresh message-table stats when the cumulative changed rows
-            # reach the bulk threshold, so a later page deferral (rate limit,
-            # capacity, fencing) cannot lose the refresh for already-written
-            # data. The helper's frequency cap keeps short deltas cheap.
-            _refresh_message_stats_if_bulk(
-                session,
-                totals.get("upserted", 0)
-                + totals.get("deleted", 0)
-                + result.upserted
-                + result.deleted,
-            )
-            session.commit()
-            totals["upserted"] += result.upserted
-            totals["deleted"] += result.deleted
-            totals["flagged"] += result.flagged
+            totals = next_totals
             cursor = result.cursor
             exhausted = result.exhausted
-        pages += 1
+            pages = next_pages
         if exhausted:
             break
 
-    with Session() as session:
-        try:
-            assert_fencing(session, account_id=account_id, fencing_token=fencing)
-        except FencingMismatch:
-            session.rollback()
-            followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                session,
-                account_id=account_id,
-                folder_id=folder_id,
-                execution_origin=origin,
-                priority=priority,
-                request_id=request_id,
-            )
-            session.commit()
-            return {
-                "status": "fencing_mismatch",
-                "followup_scheduled": True,
-                "followup_coalesced": followup_coalesced,
-                **totals,
-            }
-        if totals.get("upserted", 0) > 0:
-            enqueue_job(
-                session,
-                job_type=JobType.ARCHIVE_MIME_BATCH.value,
-                execution_origin=ExecutionOrigin.BACKGROUND,
-                account_id=account_id,
-                priority=60,
-                dedupe_key=f"archive_mime_batch:{account_id}",
-            )
-        if not exhausted:
-            enqueue_job(
-                session,
-                job_type=JobType.SYNC_FOLDER_DELTA.value,
-                execution_origin=origin,
-                account_id=account_id,
-                payload=sync_request_payload(request_id, folder_id=str(folder_id)),
-                priority=priority,
-                dedupe_key=f"delta:{account_id}:{folder_id}",
-            )
-        _refresh_message_stats_if_bulk(
-            session, totals.get("upserted", 0) + totals.get("deleted", 0)
-        )
-        release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-        session.commit()
+    if not finalized:
+        use_final_session = final_session is not None
+        ctx = nullcontext(final_session) if use_final_session else Session()
+        with ctx as work_session:
+            try:
+                _finalize_delta_in_session(
+                    work_session,
+                    account_id=account_id,
+                    folder_id=folder_id,
+                    worker_id=worker_id,
+                    fencing=fencing,
+                    origin=origin,
+                    priority=priority,
+                    request_id=request_id,
+                    totals=totals,
+                    exhausted=exhausted,
+                )
+                if not use_final_session:
+                    work_session.commit()
+            except FencingMismatch:
+                return _handle_fencing_loss(work_session, commit=not use_final_session)
+            except Exception:
+                _rollback_and_release(work_session, use_final=use_final_session)
+                raise
     # t094: carry the execution fencing token so settlement can reject a
     # superseded run that commits late (monotonic token comparison).
     return {

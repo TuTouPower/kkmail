@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, exists, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from mail_core.mail.domain.enums import (
 )
 from mail_core.mail.domain.failures import StructuredFailure
 from mail_core.mail.storage.models import (
+    SyncRequest,
     SyncRequestTarget,
     SyncRequestTargetJob,
     WorkerJob,
@@ -53,6 +54,8 @@ def _advance_delta_watermark_on_settle(
     if getattr(job, "account_id", None) is None:
         return
     payload = getattr(job, "payload", None) or {}
+    if not isinstance(payload, dict):
+        return
     folder_raw = payload.get("folder_id")
     if not folder_raw:
         return
@@ -70,13 +73,18 @@ def _advance_delta_watermark_on_settle(
         return
     from mail_core.sync.checkpoints import advance_delta_settlement_watermark
 
-    # t094: capture the execution's fencing token from the delta result when
-    # present; the monotonic token comparison in the watermark helper rejects
-    # a superseded execution that commits late.
+    # t094: capture the execution's fencing token from the delta result or
+    # persisted job payload; the monotonic token comparison in the watermark
+    # helper rejects a superseded execution that settles late.
+    raw_token = None
+    if isinstance(result, dict) and result.get("fencing_token") is not None:
+        raw_token = result["fencing_token"]
+    elif payload.get("_fencing_token") is not None:
+        raw_token = payload["_fencing_token"]
     fencing_token = None
-    if result is not None and result.get("fencing_token") is not None:
+    if raw_token is not None and not isinstance(raw_token, bool):
         try:
-            fencing_token = int(result["fencing_token"])
+            fencing_token = int(raw_token)
         except (ValueError, TypeError):
             fencing_token = None
     advance_delta_settlement_watermark(
@@ -87,8 +95,36 @@ def _advance_delta_watermark_on_settle(
         fencing_token=fencing_token,
     )
 
+
+def _strip_fencing_token(job: WorkerJob) -> None:
+    """Clear any per-attempt fencing token when returning a job to PENDING."""
+    payload = getattr(job, "payload", None)
+    if isinstance(payload, dict) and "_fencing_token" in payload:
+        cleaned = dict(payload)
+        cleaned.pop("_fencing_token", None)
+        job.payload = cleaned
+
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
+
+
+def terminal_job_status_predicate():
+    """Literal status predicate matching partial index ix_worker_jobs_terminal_cleanup."""
+    return text("worker_jobs.status IN ('done', 'failed')")
+
+
+def active_job_status_predicate():
+    """Literal status predicate matching partial index ix_worker_jobs_dedupe_active."""
+    return text("worker_jobs.status IN ('pending', 'claimed')")
+
+
+def active_dedupe_job_predicates(dedupe_key: Any):
+    """Predicates matching partial index ix_worker_jobs_dedupe_active under generic plans."""
+    return (
+        WorkerJob.dedupe_key.is_not(None),
+        WorkerJob.dedupe_key == dedupe_key,
+        active_job_status_predicate(),
+    )
 
 LEASE_JOB_TYPES: frozenset[str] = frozenset({
     JobType.SYNC_ACCOUNT_FOLDERS.value,
@@ -284,8 +320,7 @@ def enqueue_job(
         if dedupe_key:
             stmt = (
                 select(WorkerJob)
-                .where(WorkerJob.dedupe_key == dedupe_key)
-                .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+                .where(*active_dedupe_job_predicates(dedupe_key))
                 .with_for_update()
                 .limit(1)
             )
@@ -603,6 +638,7 @@ def reschedule_job(
     job.run_after = now + timedelta(seconds=delay)
     job.locked_by = None
     job.locked_at = None
+    _strip_fencing_token(job)
     session.flush()
     from mail_core.sync.execution import refresh_requests, settle_job_links
 
@@ -687,6 +723,7 @@ def fail_job(
         if isinstance(getattr(job, "payload", None), dict):
             stamped = dict(job.payload or {})
             stamped["_backoff_until"] = job.run_after.isoformat()
+            stamped.pop("_fencing_token", None)
             job.payload = stamped
         session.flush()
         # Retriable failure: bound targets stay open on the same generation.
@@ -763,6 +800,7 @@ def reclaim_stale_claims(
             job.last_error = (prev + suffix)[:2000]
         if failure_attempts < cap:
             job.status = JobStatus.PENDING.value
+            _strip_fencing_token(job)
             requeued.append(job)
         else:
             job.status = JobStatus.FAILED.value
@@ -802,26 +840,50 @@ def prune_completed_jobs(
 ) -> int:
     """Delete terminal jobs past the retention window (t094 AC-003/007).
 
-    A terminal job whose sync-request target is still open is excluded: its
-    link may carry a failure that target re-aggregation still needs (a sibling
-    link can still be running). Deleting it early could flip a correctly-failed
-    request to success once the slow sibling completes. Only jobs whose links
-    belong exclusively to already-settled targets are reclaimable.
+    A terminal job whose sync-request target OR parent sync-request is still
+    open is excluded via correlated ``NOT EXISTS``: a failed target in a
+    multi-target request still needs its links/state protected while sibling
+    targets remain open. Only jobs whose links belong exclusively to already-
+    settled targets and settled parent requests are reclaimable.
     """
+    if int(limit) <= 0:
+        return 0
+    effective_limit = min(int(limit), COMPLETED_JOB_PRUNE_BATCH)
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
-    open_target_link_jobs = select(SyncRequestTargetJob.job_id).join(
-        SyncRequestTarget,
-        SyncRequestTarget.id == SyncRequestTargetJob.target_id,
-    ).where(SyncRequestTarget.state.in_(("queued", "running")))
+    open_target_link = exists(
+        select(1)
+        .select_from(SyncRequestTargetJob)
+        .join(
+            SyncRequestTarget,
+            SyncRequestTarget.id == SyncRequestTargetJob.target_id,
+        )
+        .where(SyncRequestTargetJob.job_id == WorkerJob.id)
+        .where(text("sync_request_targets.state IN ('queued', 'running')"))
+    )
+    open_request_link = exists(
+        select(1)
+        .select_from(SyncRequestTargetJob)
+        .join(
+            SyncRequestTarget,
+            SyncRequestTarget.id == SyncRequestTargetJob.target_id,
+        )
+        .join(
+            SyncRequest,
+            SyncRequest.id == SyncRequestTarget.request_id,
+        )
+        .where(SyncRequestTargetJob.job_id == WorkerJob.id)
+        .where(text("sync_requests.state IN ('queued', 'running')"))
+    )
     ids = list(
         session.scalars(
             select(WorkerJob.id)
-            .where(WorkerJob.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]))
+            .where(terminal_job_status_predicate())
             .where(WorkerJob.updated_at < cutoff)
-            .where(WorkerJob.id.not_in(open_target_link_jobs))
+            .where(~open_target_link)
+            .where(~open_request_link)
             .order_by(WorkerJob.updated_at.asc())
-            .limit(max(1, int(limit)))
+            .limit(effective_limit)
         ).all()
     )
     if not ids:
