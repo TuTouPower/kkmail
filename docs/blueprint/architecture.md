@@ -98,7 +98,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 
 1. **Worker 独立错峰巡检调度器**：
     - 废除任务执行尾部的 30 秒自调度逻辑，由 Worker 主循环的 `_schedule_periodic_sync_once` 每 60 秒定期巡检；
-    - 对所有 `sync_enabled=True` 账号的有效收件箱（`role="inbox"`、`kind="container"`、`selectable=True`、`remote_state="active"`），若距离上次成功同步超过设定阈值（默认 1200 秒 / 20 分钟，环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S` 可调），且无在途任务，自动入队 `SYNC_FOLDER_DELTA`（`priority = 75`）；
+    - 对所有 `sync_enabled=True` 账号的有效收件箱（`role="inbox"`、`kind="container"`、`selectable=True`、`remote_state="active"`），以 `SyncCheckpoint.last_delta_settled_at` 为唯一水位依据按三状态契约判定到期（无基线或 `full_scan_complete=false` 不排期、基线就绪且水位为空立即到期、水位已置则按默认 1200 秒 / 20 分钟间隔判定，环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S` 可调），且无在途 `pending`/`claimed` 任务时，自动入队 `SYNC_FOLDER_DELTA`（`priority = 75`）；
     - 批量超期任务采用时间窗口错峰打散（Stagger），将各任务的 `run_after` 均匀分散在轮询周期内，避免多账号（如 300 邮箱）并发触发服务商连接风控与本地队列雷暴。
 2. **增量收信连带正文自动存库流水线**：
     - 增量同步（`sync_folder_delta`）拉取新邮件元数据并持久化入库后（`upserted > 0`），自动在同事务中入队 `ARCHIVE_MIME_BATCH`（`priority = 60`，去重键 `archive_mime_batch:{account_id}`）；
@@ -108,7 +108,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 
 1. **IDLE 唤醒通道（信号与拉取分离）**：
     - Worker 进程内 `IdleWatcherManager` 为符合条件的 IMAP 账号维持至多一条收件箱 IDLE 长连接；IDLE 只作新邮件到达信号，唤醒后入队既有 `SYNC_FOLDER_DELTA`（去重键 `delta:{account_id}:{folder_id}`），实际拉取仍走 delta 流水线（基线门禁、账号租约、fencing 不变），watcher 不直接读写邮件数据；每次会话成功建立（首连、断线重连、凭据或席位重建）后先入队一次同去重键的收件箱补偿 delta，覆盖无活动会话窗口内到达的邮件；入队失败按有界退避重试，预算耗尽则释放 IDLE 席位让 t057 轮询兜底并在下次重连继续补偿，不终止 watcher；
-    - 长连接走独立配额（集中配置默认 32，与账号总数无关），不占用 `connection_slots` 的 8 个任务槽位；配额席位只按邮件数据分配：以收件箱内现存邮件的服务器到达时间（INTERNALDATE）最大值倒序为主序，空收件箱账号整体居后（组内按其他文件夹到达时间、账号创建时间、账号 id 定序），同组内带滞回防抖；持有 IDLE 的账号跳过 t057 收件箱轮询、让位后恢复轮询；
+    - 长连接走独立配额（由 `mail_core/runtime_budget.py` 单一来源派生，单机默认 8，与账号总数无关），不占用 `connection_slots` 的 8 个任务槽位；配额席位只按邮件数据分配：以收件箱内现存邮件的服务器到达时间（INTERNALDATE）最大值倒序为主序，空收件箱账号整体居后（组内按其他文件夹到达时间、账号创建时间、账号 id 定序），同组内带滞回防抖；持有 IDLE 的账号跳过 t057 收件箱轮询、让位后恢复轮询；
     - 无 IDLE 能力、永久认证失败、反复断线退避中的账号自动降级为纯轮询，watcher 异常不影响调度主循环，也不把账号标记为永久 failed；watcher 状态经 `AppSetting` 的 `worker:idle_state` 记录暴露。
 2. **全文件夹 STATUS 周期巡检与状态彻底隔离 (A14)**：
     - Worker 调度周期内对全部非收件箱、可同步物理目录（`kind="container"`、`selectable=True`、`remote_state="active"`）做短连接 STATUS 探测（IMAP STATUS 不 SELECT 不 FETCH；Graph 以文件夹计数接口探测），探测连接走任务槽位预算；
@@ -138,6 +138,20 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 2. 任务处于 CLAIMED 期间到达的新请求关联到该真实任务并标记 `needs_successor`；`complete_job` 先创建后继任务，再在同事务把等待关联迁移到后继，由后继覆盖其数据目标。不存在指向尚未创建执行的关联。
 3. `execution_lost` 状态类与「The bound sync execution no longer exists」文案彻底移除；只有数据确实无法推进（凭据失效、权限拒绝、账户/文件夹删除）才判失败，文案面向用户；无任务推进时由有界巡检收敛为可操作的重试提示，不留悬挂请求。
 4. 全量扫描的 `ScanGenerationMismatch` 防串扰机制保留，但代际只用于游标归属判定，不再承载请求完成观察。
+
+## 同步水位权威与瞬态队列生命周期 (t094)
+
+1. **检查点单一水位权威与三状态首次排期**：
+    - `sync_checkpoints.last_delta_settled_at` 是周期收件箱增量调度的唯一水位，表示「最近一次 delta 执行链结算时间」；`schedule_periodic_inbox_sync` 仅读取检查点判定到期，彻底移除对 `worker_jobs` 终态历史的全表反推查询，仅查询活跃态任务（`pending`/`claimed`）做去重。
+    - 三状态首次排期契约：无 checkpoint 或 `full_scan_complete=false`（含重建中）不排 delta，由元数据发现链建立基线；基线就绪且 `last_delta_settled_at IS NULL` 立即到期首次排期并按轮询窗口错峰打散；水位已置按轮询间隔判定。
+    - 结算事务原子推进与单调约束：仅 delta 执行链真实结算态（`ok` 且 `exhausted=true` 且无 `followup_scheduled`、`skipped`、`sync_disabled`、以及重试耗尽/reclaim 超限终态失败）在同一结算事务内单调（`GREATEST`）推进水位并受 `fencing_token` 单调保护；续页、限流、容量延期、失锁与 `cursor_invalid` 转重建等中间态不推进水位。
+2. **瞬态队列生命周期与回收资格**：
+    - `worker_jobs` 终态行（`done`/`failed`）与已发布 `outbox` 行均为瞬态传输缓冲而非审计归档，统一固定 24 小时保留窗口（`src/mail_core/sync/retention.py` 代码常量，无产品级 env 开关），单批清理上限 5,000 行，每 60 秒回收周期排空积压。
+    - `worker_jobs` 回收资格排除仍关联 `queued`/`running` 同步请求目标的终态行，避免慢目录完成重聚合时丢失失败结果。
+    - `outbox` 仅删除已发布连续前缀中超出 24 小时窗口的行，未发布行（`publication_seq IS NULL`）永不删除；删除与 `OutboxPublicationState.pruned_through_seq` 推进同事务完成，SSE 重放或分发游标落后于 `pruned_through_seq` 时发送 `client.resync_hint` 触发全量重同步收敛。
+3. **部分索引与批量统计收敛**：
+    - `worker_jobs` 通过部分索引 `ix_worker_jobs_terminal_cleanup (updated_at) WHERE status IN ('done', 'failed')` 支撑清理、通过 `ix_worker_jobs_dedupe_active` 支撑活跃去重；迁移 `20261128_0008` 删除基线遗留重复 `ix_message_search_from_trgm`，保持 `message_search.from_text` 仅存唯一 `gin_trgm_ops` GIN 索引。
+    - 按需统计刷新：单次清理删除不少于 1,000 行时对对应队列表（`worker_jobs`/`outbox`）执行 `ANALYZE`；批量消息变更累计达到 1,000 行时按需对 `message_search`、`messages` 与 `message_bodies` 执行 `ANALYZE`（进程内受 300 秒最小间隔限频），日常短 delta 不重复刷新统计。
 
 ## 远程图片放行存储与正文内联图片 Signed URL 预览 (t066)
 

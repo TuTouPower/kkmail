@@ -17,12 +17,25 @@ DEFAULT_BACKGROUND_START_SLOT = 2
 # are NOT counted in pool_size.
 DEFAULT_DB_POOL_SIZE = 4
 DEFAULT_DB_MAX_OVERFLOW = 4
+DEFAULT_LISTEN_CONNECTIONS = 2  # 1 outbox LISTEN + 1 worker job-wake LISTEN
+DEFAULT_MAINTENANCE_HEADROOM = 6  # startup migrations, health/ops, ad-hoc CLI
 
 # IDLE watcher: long-lived IMAP connections for the main inboxes; decoupled
 # from the task-slot budget. 8 covers a realistic single-host inbox count.
 DEFAULT_IDLE_QUOTA = 8
 
-# Total client connections admitted to PostgreSQL (pool + overflow + the two
-# LISTEN direct connections + headroom for maintenance). Exposed so operators
-# can size max_connections consistently.
-MAX_CLIENT_CONNECTIONS = 16
+# Data-plane client connection ceiling admitted to PostgreSQL:
+#   data-plane pool (4 + 4 = 8) + LISTEN (2) + maintenance/migration headroom (6) = 16.
+MAX_CLIENT_CONNECTIONS = (
+    DEFAULT_DB_POOL_SIZE
+    + DEFAULT_DB_MAX_OVERFLOW
+    + DEFAULT_LISTEN_CONNECTIONS
+    + DEFAULT_MAINTENANCE_HEADROOM
+)
+
+# Control-plane provider slot permits (`DedicatedSlotPermitFactory`) hold one
+# dedicated autocommit psycopg connection per active `pg_try_advisory_lock`
+# slot (`DEFAULT_TOTAL_SLOTS = 8`). Worst-case single-host peak: 16 + 8 = 24,
+# comfortably bounded inside Compose PostgreSQL `max_connections = 40`.
+MAX_TOTAL_PG_CONNECTIONS = MAX_CLIENT_CONNECTIONS + DEFAULT_TOTAL_SLOTS
+COMPOSE_PG_MAX_CONNECTIONS = 40

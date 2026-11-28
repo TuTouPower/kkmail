@@ -266,7 +266,13 @@ Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail
 
 ## 十四、 单机运行时、探针与提交耐久性约定 (t095)
 
-1. **单一并发预算**：DB 连接池、IDLE 配额与 Worker 执行槽位的默认值只由 `mail_core/runtime_budget.py` 派生，禁止在多模块重复硬编码；单机默认 4/4 连接池、8 IDLE 配额，并为 Outbox/Job LISTEN 直连分别预留，总客户端连接上限不超过 `MAX_CLIENT_CONNECTIONS`。
-2. **探针与业务读分离**：`/ready` 的 DB、schema、LISTEN、Worker 就绪读取一律走 Core Connection，禁止打开 ORM Session（避免每次探针发送 `ROLLBACK`）；只缓存 worker 派生信号（短 TTL），DB/schema/LISTEN 每次读新值且断开立即失效；容器存活性由 Worker 主循环刷新的 tmpfs 戳文件判定，探针不冷启解释器查库。
+1. **单一并发预算**：DB 连接池、IDLE 配额与 Worker 执行槽位的默认值只由 `mail_core/runtime_budget.py` 派生，禁止在多模块重复硬编码；数据面连接池默认 `DEFAULT_DB_POOL_SIZE = 4`、`DEFAULT_DB_MAX_OVERFLOW = 4`（共 8 条），加 `LISTEN` 直连（Outbox 与 Job 唤醒各 1 条，共 2 条）与维护/迁移余量（6 条）组成 `MAX_CLIENT_CONNECTIONS = 16`；另加控制面 `DedicatedSlotPermitFactory` 每持有 1 个全局槽位独立占用的 `pg_try_advisory_lock` 连接（`DEFAULT_TOTAL_SLOTS = 8`），单进程嵌入式最坏连接峰值为 `24`，稳妥落在 Compose PostgreSQL `max_connections = 40` 上限内；IDLE 配额默认 8（线程上界 `2 × 8 = 16`）。
+2. **探针与业务读分离**：`/ready` 的 DB、schema、LISTEN、Worker 就绪读取一律走 Core Connection（`AUTOCOMMIT`），禁止打开 ORM Session（避免每次探针发送 `ROLLBACK`）；只缓存 worker 派生信号（短 TTL），DB/schema/LISTEN 每次读新值；嵌入式模式（`MAIL_CORE_EMBEDDED_WORKER != "0"`）或显式配置 `MAIL_CORE_LIVENESS_STAMP` 时，本地存活戳缺失、不可读、损坏或过期均判定 worker 未就绪，分布式未配置显式戳时保持数据库心跳判定；`/ready` 任意失败早返回及 `OutboxListenThread` 断开/停止时必须立即调用 `get_readiness_probe().invalidate()` 清除缓存，防止跨故障恢复沿用旧状态；容器存活性由 Worker 主循环刷新的 tmpfs 戳文件判定，探针不冷启解释器查库。
 3. **巡检账号级门禁**：全夹巡检的账号级短路与跨轮冷却由 `account.config` 的 patrol 冷却状态持有，与 `connectivity_state` 正交；后台传输失败继续隔离（t090），不污染账号健康展示；永久认证失败走凭据状态；单目录错误只影响该目录；共享端点上其他账号不受牵连。
 4. **提交耐久性白名单**：仅独立心跳等可丢弃状态允许异步提交；邮件入库、checkpoint、Outbox、同步请求结算及带远端副作用的业务事务必须同步提交；禁止用 `synchronous_commit=off` 代替检查点调优。
+
+## 十五、 同步水位单一权威与瞬态队列约定 (t094)
+
+1. **状态属检查点、过程属队列**：周期增量轮询的唯一权威水位为 `sync_checkpoints.last_delta_settled_at`（只读检查点并遵循三状态首次排期契约：无完整基线或重建中不排 delta、基线就绪且水位为空立即到期、水位已置按轮询间隔判定）；禁止在调度查询中扫描 `worker_jobs` 终态行反推同步时间。仅执行链真实结算态在结算事务内单调推进水位并受 `fencing_token` 约束，中间态不推进。
+2. **瞬态队列短保留与回收资格**：终态 `worker_jobs` 与已发布 `outbox` 固定保留 24 小时（代码常量 `COMPLETED_JOB_RETENTION` / `PUBLISHED_OUTBOX_RETENTION`，无产品级开关），每批回收上限 5,000 行；`worker_jobs` 回收必须排除仍关联 `queued`/`running` 同步请求目标的终态行；`outbox` 仅删除连续前缀中的超窗已发布行并同事务推进 `OutboxPublicationState.pruned_through_seq`，未发布行受保护，落后游标经 `client.resync_hint` 触发重同步收敛。
+3. **索引唯一性与按需统计刷新**：同表同列同操作符类禁止并存重复索引（`message_search.from_text` 仅保留唯一 `gin_trgm_ops` 索引）；`worker_jobs` 终态回收与活跃去重分别使用部分索引 `ix_worker_jobs_terminal_cleanup` 与 `ix_worker_jobs_dedupe_active`；大批量清理（单批 `>= 1000` 行）及大批量消息写入（累计 `>= 1000` 行且进程内受 300 秒最小间隔限频）按需执行 `ANALYZE`，禁止日常短 delta 重复刷新统计。
