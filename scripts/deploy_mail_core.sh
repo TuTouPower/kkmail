@@ -185,10 +185,15 @@ for service in api worker migrate; do
     docker image tag "$service_image" "$(image_repo "$service_image"):$commit"
 done
 
-# Quiesce writers before migrating: stop api/worker so no old process writes
-# against a schema the migration is about to change. The migrate service runs
-# the single guarded entrypoint (python -m mail_core --migrate-only) in the
-# foreground; its exit code decides whether the new app starts.
+# Quiesce writers before migrating: retire any running embedded single-process
+# container and stop api/worker so no old process writes against a schema the
+# migration is about to change (or overlaps on port 37281). The migrate
+# service runs the single guarded entrypoint (python -m mail_core --migrate-only)
+# in the foreground; its exit code decides whether the new app starts.
+if docker inspect kkmail-mail-core-app >/dev/null 2>&1; then
+    docker stop kkmail-mail-core-app >/dev/null 2>&1 || true
+    docker rm -f kkmail-mail-core-app >/dev/null 2>&1 || true
+fi
 docker compose -f docker-compose.mail-core.yml --profile distributed stop api worker
 if ! docker compose -f docker-compose.mail-core.yml --profile distributed up --abort-on-container-exit --exit-code-from migrate migrate; then
     fail "migration container failed; api/worker remain stopped, restore the sealed backup or fix forward before starting the app"

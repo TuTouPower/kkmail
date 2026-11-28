@@ -64,6 +64,7 @@ services:
       - "${MAIL_CORE_HOST_BIND:-127.0.0.1}:37281:8000"
     volumes:
       - kkmail_mail_core_blobs:/var/lib/kkmail/blobs
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=16m"]
     depends_on:
       postgres:
         condition: service_healthy

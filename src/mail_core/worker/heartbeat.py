@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -165,14 +167,28 @@ class WorkerHeartbeatLoop:
         session_factory: Callable[[], Session],
         *,
         interval_s: float = 15.0,
+        watchdog_timeout_s: float | None = None,
+        on_watchdog_stall: Callable[[float], None] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.worker_id = worker_id
         self.session_factory = session_factory
         self.interval_s = max(interval_s, 0.01)
+        self.watchdog_timeout_s: float | None = (
+            float(watchdog_timeout_s)
+            if watchdog_timeout_s is not None
+            and math.isfinite(watchdog_timeout_s)
+            and watchdog_timeout_s > 0
+            else None
+        )
+        self.on_watchdog_stall = on_watchdog_stall
+        self._monotonic = monotonic
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._active_jobs = 0
         self._lock = threading.Lock()
+        self._last_progress_monotonic: float = self._monotonic()
+        self._stall_reported = False
 
     def set_active_jobs(self, count: int) -> None:
         with self._lock:
@@ -181,6 +197,37 @@ class WorkerHeartbeatLoop:
     def get_active_jobs(self) -> int:
         with self._lock:
             return self._active_jobs
+
+    def mark_progress(self) -> None:
+        """Record main-loop progress so the stall watchdog resets its deadline."""
+        with self._lock:
+            self._last_progress_monotonic = self._monotonic()
+            self._stall_reported = False
+
+    def _check_watchdog(self) -> None:
+        timeout = self.watchdog_timeout_s
+        if timeout is None or timeout <= 0:
+            return
+        callback: Callable[[float], None] | None = None
+        elapsed = 0.0
+        with self._lock:
+            elapsed = max(0.0, self._monotonic() - self._last_progress_monotonic)
+            if elapsed <= timeout or self._stall_reported:
+                return
+            self._stall_reported = True
+            callback = self.on_watchdog_stall
+        log.critical(
+            "worker main loop stalled for %.1fs (watchdog_timeout_s=%.1fs); triggering recovery",
+            elapsed,
+            timeout,
+        )
+        if callback is not None:
+            try:
+                callback(elapsed)
+            except Exception as exc:
+                from mail_core.security.redact import safe_error
+
+                log.error("worker watchdog callback failed: %s", safe_error(exc))
 
     def _tick(self) -> None:
         try:
@@ -195,10 +242,13 @@ class WorkerHeartbeatLoop:
             from mail_core.security.redact import safe_error
 
             log.warning("worker heartbeat write failed: %s", safe_error(exc))
+        finally:
+            self._check_watchdog()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        self.mark_progress()
         self._tick()
         self._stop_event.clear()
 
