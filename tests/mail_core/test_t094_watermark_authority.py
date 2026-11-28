@@ -872,3 +872,159 @@ def test_ac003_refresh_requests_preserves_terminal_targets_and_allows_retry_reop
         assert session.get(SyncRequestTarget, t_retry_id).state == "complete"
         assert session.get(SyncRequestTarget, t_retry_id).error_code is None
         assert session.get(SyncRequest, req2_id).state == "complete"
+
+
+def _sql_literal_for_execute(value):
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, datetime):
+        return f"'{value.isoformat()}'::timestamptz"
+    if isinstance(value, uuid.UUID):
+        return f"'{value}'::uuid"
+    escaped = str(value).replace("'", "''")
+    return f"'{escaped}'"
+
+
+def test_ac005_production_orm_queries_use_partial_indexes_under_force_generic_plan():
+    """Finding 6: real ORM SQL from prune_completed_jobs, enqueue_job,
+    find_active_job, and _inflight_full_root_generation must hit the partial
+    indexes (and avoid Seq Scan on sync_request_targets) under force_generic_plan.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.dialects import postgresql
+
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.application.sync_requests import _inflight_full_root_generation
+    from mail_core.sync.execution import find_active_job
+    from mail_core.sync.jobs import enqueue_job
+
+    Session = get_session_factory()
+
+    class _Captured(Exception):
+        pass
+
+    with Session() as session:
+        acc, _folder = _seed_account_with_inbox(session, prefix="gplan")
+        acc_id = acc.id
+        session.execute(
+            text(
+                """
+                INSERT INTO worker_jobs (id, job_type, execution_origin, status, updated_at, dedupe_key)
+                SELECT gen_random_uuid(), 'sync_folder_delta', 'background',
+                       CASE WHEN n <= 10000 THEN 'done'
+                            WHEN n <= 20000 THEN 'failed'
+                            WHEN n <= 20020 THEN 'pending'
+                            ELSE 'claimed' END,
+                       now() - interval '3 days',
+                       'gplan:' || n
+                FROM generate_series(1, 20040) AS n
+                """
+            )
+        )
+        # Seed 5,000 settled requests + targets + links so the anti-join planner
+        # chooses index lookups over sync_request_targets instead of Seq Scan.
+        session.execute(
+            text(
+                """
+                WITH reqs AS (
+                    INSERT INTO sync_requests (id, client_request_id, mode, trigger, state, scope)
+                    SELECT gen_random_uuid(), 'gp-req-' || n, 'delta', 'manual', 'complete', '{}'::jsonb
+                    FROM generate_series(1, 5000) AS n
+                    RETURNING id, client_request_id
+                ),
+                tgs AS (
+                    INSERT INTO sync_request_targets (id, request_id, target_key, requested_generation, state)
+                    SELECT gen_random_uuid(), reqs.id, 'k:' || reqs.client_request_id, gen_random_uuid(), 'complete'
+                    FROM reqs
+                    RETURNING id
+                ),
+                sample_jobs AS (
+                    SELECT id, row_number() OVER () AS rn
+                    FROM worker_jobs
+                    WHERE status IN ('done', 'failed')
+                    LIMIT 5000
+                ),
+                numbered_tgs AS (
+                    SELECT id, row_number() OVER () AS rn
+                    FROM tgs
+                )
+                INSERT INTO sync_request_target_jobs (id, target_id, job_id, status)
+                SELECT gen_random_uuid(), numbered_tgs.id, sample_jobs.id, 'complete'
+                FROM numbered_tgs
+                JOIN sample_jobs ON sample_jobs.rn = numbered_tgs.rn
+                """
+            )
+        )
+        session.execute(text("ANALYZE worker_jobs"))
+        session.execute(text("ANALYZE sync_requests"))
+        session.execute(text("ANALYZE sync_request_targets"))
+        session.execute(text("ANALYZE sync_request_target_jobs"))
+
+        captured: dict[str, object] = {}
+        current_label = {"name": ""}
+
+        def _capture(orm_state):
+            captured[current_label["name"]] = orm_state.statement
+            raise _Captured
+
+        event.listen(session, "do_orm_execute", _capture)
+        try:
+            operations = [
+                ("prune", lambda: prune_completed_jobs(session)),
+                (
+                    "enqueue_dedupe",
+                    lambda: enqueue_job(
+                        session,
+                        job_type=JobType.SYNC_FOLDER_DELTA.value,
+                        execution_origin=ExecutionOrigin.BACKGROUND,
+                        dedupe_key="gplan:20020",
+                    ),
+                ),
+                ("find_active", lambda: find_active_job(session, "gplan:20020")),
+                ("inflight_sync", lambda: _inflight_full_root_generation(session, acc_id)),
+            ]
+            for label, fn in operations:
+                current_label["name"] = label
+                try:
+                    fn()
+                except _Captured:
+                    pass
+        finally:
+            event.remove(session, "do_orm_execute", _capture)
+
+        assert set(captured) == {"prune", "enqueue_dedupe", "find_active", "inflight_sync"}
+
+        conn = session.connection()
+        conn.exec_driver_sql("SET LOCAL plan_cache_mode = 'force_generic_plan'")
+        plans: dict[str, str] = {}
+        for idx, (label, stmt) in enumerate(captured.items()):
+            compiled = stmt.compile(
+                dialect=postgresql.dialect(paramstyle="numeric_dollar"),
+                compile_kwargs={"render_postcompile": True},
+            )
+            args = [_sql_literal_for_execute(compiled.params[p]) for p in (compiled.positiontup or ())]
+            prep_name = f"t094_gp_{idx}"
+            conn.exec_driver_sql(f"PREPARE {prep_name} AS {compiled.string}")
+            exec_sql = (
+                f"EXPLAIN (COSTS OFF) EXECUTE {prep_name}({', '.join(args)})"
+                if args
+                else f"EXPLAIN (COSTS OFF) EXECUTE {prep_name}"
+            )
+            plans[label] = "\n".join(row[0] for row in conn.exec_driver_sql(exec_sql))
+            conn.exec_driver_sql(f"DEALLOCATE {prep_name}")
+
+        assert "ix_worker_jobs_terminal_cleanup" in plans["prune"], plans["prune"]
+        assert "ix_worker_jobs_claim" not in plans["prune"], plans["prune"]
+        assert "Sort" not in plans["prune"], plans["prune"]
+        assert "Seq Scan" not in plans["prune"], plans["prune"]
+
+        for active_label in ("enqueue_dedupe", "find_active", "inflight_sync"):
+            assert "ix_worker_jobs_dedupe_active" in plans[active_label], plans[active_label]
+            assert "ix_worker_jobs_claim" not in plans[active_label], plans[active_label]
+            assert "Seq Scan" not in plans[active_label], plans[active_label]
+
+        session.rollback()

@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import delete, exists, or_, select, text, update
+from sqlalchemy import delete, exists, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -90,6 +90,25 @@ def _advance_delta_watermark_on_settle(
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
+
+
+def terminal_job_status_predicate():
+    """Literal status predicate matching partial index ix_worker_jobs_terminal_cleanup."""
+    return text("worker_jobs.status IN ('done', 'failed')")
+
+
+def active_job_status_predicate():
+    """Literal status predicate matching partial index ix_worker_jobs_dedupe_active."""
+    return text("worker_jobs.status IN ('pending', 'claimed')")
+
+
+def active_dedupe_job_predicates(dedupe_key: Any):
+    """Predicates matching partial index ix_worker_jobs_dedupe_active under generic plans."""
+    return (
+        WorkerJob.dedupe_key.is_not(None),
+        WorkerJob.dedupe_key == dedupe_key,
+        active_job_status_predicate(),
+    )
 
 LEASE_JOB_TYPES: frozenset[str] = frozenset({
     JobType.SYNC_ACCOUNT_FOLDERS.value,
@@ -285,8 +304,7 @@ def enqueue_job(
         if dedupe_key:
             stmt = (
                 select(WorkerJob)
-                .where(WorkerJob.dedupe_key == dedupe_key)
-                .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+                .where(*active_dedupe_job_predicates(dedupe_key))
                 .with_for_update()
                 .limit(1)
             )
@@ -809,10 +827,18 @@ def prune_completed_jobs(
     targets remain open. Only jobs whose links belong exclusively to already-
     settled targets and settled parent requests are reclaimable.
     """
-    from mail_core.sync.execution import OPEN_LINK_STATES
-
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
+    open_target_link = exists(
+        select(1)
+        .select_from(SyncRequestTargetJob)
+        .join(
+            SyncRequestTarget,
+            SyncRequestTarget.id == SyncRequestTargetJob.target_id,
+        )
+        .where(SyncRequestTargetJob.job_id == WorkerJob.id)
+        .where(text("sync_request_targets.state IN ('queued', 'running')"))
+    )
     open_request_link = exists(
         select(1)
         .select_from(SyncRequestTargetJob)
@@ -825,18 +851,14 @@ def prune_completed_jobs(
             SyncRequest.id == SyncRequestTarget.request_id,
         )
         .where(SyncRequestTargetJob.job_id == WorkerJob.id)
-        .where(
-            or_(
-                SyncRequestTarget.state.in_(OPEN_LINK_STATES),
-                SyncRequest.state.in_(OPEN_LINK_STATES),
-            )
-        )
+        .where(text("sync_requests.state IN ('queued', 'running')"))
     )
     ids = list(
         session.scalars(
             select(WorkerJob.id)
-            .where(WorkerJob.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]))
+            .where(terminal_job_status_predicate())
             .where(WorkerJob.updated_at < cutoff)
+            .where(~open_target_link)
             .where(~open_request_link)
             .order_by(WorkerJob.updated_at.asc())
             .limit(max(1, int(limit)))

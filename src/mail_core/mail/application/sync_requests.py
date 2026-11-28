@@ -28,7 +28,11 @@ from mail_core.mail.storage.models import (
 )
 from mail_core.sync.context import sync_request_payload
 from mail_core.sync.execution import bind_target
-from mail_core.sync.jobs import enqueue_job
+from mail_core.sync.jobs import (
+    active_dedupe_job_predicates,
+    active_job_status_predicate,
+    enqueue_job,
+)
 
 
 def _payload_root_generation(payload: dict | None) -> uuid.UUID | None:
@@ -62,8 +66,7 @@ def _inflight_full_root_generation(session: Session, account_id: uuid.UUID) -> u
     """
     job = session.scalar(
         select(WorkerJob)
-        .where(WorkerJob.dedupe_key == f"sync:{account_id}")
-        .where(WorkerJob.status.in_(["pending", "claimed"]))
+        .where(*active_dedupe_job_predicates(f"sync:{account_id}"))
         .limit(1)
     )
     if job is not None:
@@ -75,8 +78,9 @@ def _inflight_full_root_generation(session: Session, account_id: uuid.UUID) -> u
         # and check the metadata jobs instead of giving up (A84).
     metadata_jobs = session.scalars(
         select(WorkerJob)
+        .where(WorkerJob.dedupe_key.is_not(None))
         .where(WorkerJob.dedupe_key.like(f"metadata:{account_id}:%"))
-        .where(WorkerJob.status.in_(["pending", "claimed"]))
+        .where(active_job_status_predicate())
         .order_by(WorkerJob.created_at)
     ).all()
     for metadata_job in metadata_jobs:

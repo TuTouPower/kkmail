@@ -260,10 +260,11 @@ def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None
 
 
 def find_active_job(session: Session, dedupe_key: str) -> WorkerJob | None:
+    from mail_core.sync.jobs import active_dedupe_job_predicates
+
     return session.scalar(
         select(WorkerJob)
-        .where(WorkerJob.dedupe_key == dedupe_key)
-        .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+        .where(*active_dedupe_job_predicates(dedupe_key))
         .limit(1)
     )
 
@@ -512,9 +513,11 @@ def converge_stalled_targets(
     # stalled: a large account legitimately stays open far longer than the
     # cutoff. Reclaim handles claimed jobs with a stale heartbeat; only
     # targets left with no executable work converge here.
+    from mail_core.sync.jobs import active_job_status_predicate
+
     live_job_ids = set(
         session.scalars(
-            select(WorkerJob.id).where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+            select(WorkerJob.id).where(active_job_status_predicate())
         ).all()
     )
     live_target_ids = {
