@@ -14,7 +14,7 @@ fail() {
     exit 1
 }
 
-for command_name in docker; do
+for command_name in docker curl rg; do
     command -v "$command_name" >/dev/null 2>&1 || fail "missing required command: $command_name"
 done
 
@@ -31,13 +31,20 @@ docker compose -f "$compose_file" config --quiet
 docker compose -f "$compose_file" config --services | rg -q '^app$' || fail "embedded stack must define a single 'app' service"
 docker compose -f "$compose_file" config --services | rg -q '^worker$' && fail "embedded stack must not define a standalone worker"
 
-# Stop any distributed stack first so the two modes never run together.
-if docker compose -f docker-compose.mail-core.yml --profile distributed ps -q 2>/dev/null | rg -q .; then
-    docker compose -f docker-compose.mail-core.yml --profile distributed down --remove-orphans
-fi
-
+# Build the embedded image BEFORE stopping any running distributed containers
+# so build failures never cause downtime.
 docker compose -f "$compose_file" build app
-docker compose -f "$compose_file" up -d --remove-orphans
+
+# Retire conflicting distributed compute containers only; keep shared
+# postgres and data volumes running untouched.
+for legacy_container in kkmail-mail-core-api kkmail-mail-core-worker; do
+    if docker inspect "$legacy_container" >/dev/null 2>&1; then
+        docker stop "$legacy_container" >/dev/null 2>&1 || true
+        docker rm -f "$legacy_container" >/dev/null 2>&1 || true
+    fi
+done
+
+docker compose -f "$compose_file" up -d
 
 # Readiness gate: the single process runs migrations before serving, so /ready
 # must reach ready within a bounded window.

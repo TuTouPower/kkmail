@@ -146,13 +146,14 @@ services:
       MAIL_CORE_BLOB_ROOT: "/var/lib/kkmail/blobs"
       MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY (must differ from blob key)}
       MAIL_CORE_WORKER_ID: "compose-worker-1"
-      MAIL_CORE_SKIP_MIGRATIONS: "${MAIL_CORE_SKIP_MIGRATIONS:-1}"
-      MAIL_CORE_EMBEDDED_WORKER: "${MAIL_CORE_EMBEDDED_WORKER:-0}"
+      MAIL_CORE_SKIP_MIGRATIONS: "1"
+      MAIL_CORE_EMBEDDED_WORKER: "0"
     ports:
       # Defaults to loopback. Set MAIL_CORE_HOST_BIND=0.0.0.0 for LAN hostname access.
       - "${MAIL_CORE_HOST_BIND:-127.0.0.1}:37281:8000"
     volumes:
       - kkmail_mail_core_blobs:/var/lib/kkmail/blobs
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=16m"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -165,7 +166,6 @@ services:
       timeout: 3s
       retries: 20
     # Distributed API mode: migrations and worker handled by separate containers.
-    # Standalone single-process override: MAIL_CORE_SKIP_MIGRATIONS=0 MAIL_CORE_EMBEDDED_WORKER=1
     command: ["python", "-m", "mail_core", "--host", "0.0.0.0", "--port", "8000"]
 
   worker:
@@ -187,6 +187,7 @@ services:
       MAIL_CORE_WORKER_ID: "distributed-worker-1"
     volumes:
       - kkmail_mail_core_blobs:/var/lib/kkmail/blobs
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=16m"]
     depends_on:
       postgres:
         condition: service_healthy

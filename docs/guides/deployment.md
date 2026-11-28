@@ -9,7 +9,10 @@ kkmail 提供两种**互斥**的运行形态，通过不同的 compose 文件区
 - **单机默认（嵌入式单进程）**：`docker-compose.embedded.yml`，API 与 Worker 在同一 Python 进程，进程自身先执行迁移再启动（此形态为单机自托管的推荐入口）。
 - **分布式扩展（可选）**：`docker-compose.mail-core.yml` + `--profile distributed`，API 与 Worker 为独立容器，面向多机 / 高吞吐。
 
-两个文件使用相同的 `kkmail_mail_core_pg` / `kkmail_mail_core_blobs` 数据卷，可在两种模式间切换而沿用数据；切换时先停掉当前模式的全部容器再启动另一模式。所有命令都显式带 `-f`，避免误用默认文件。
+两个文件使用相同的 `kkmail_mail_core_pg` / `kkmail_mail_core_blobs` 数据卷，可在两种模式间安全切换并沿用数据。请使用各自对应的部署脚本切换模式（所有命令均显式带 `-f`，避免误用默认文件）：
+
+- **切入或升级单机默认（嵌入式）**：执行 `scripts/deploy_embedded.sh`。脚本会先构建 `app` 镜像（构建失败不中断现网容器），再仅停止并移除冲突的分布式计算容器（`kkmail-mail-core-api`、`kkmail-mail-core-worker`），保留共享的 `kkmail-mail-core-pg` 容器及 `kkmail_mail_core_pg` / `kkmail_mail_core_blobs` 数据卷，最后启动 `docker-compose.embedded.yml` 并等待 `/ready`。不要对分布式栈执行 `down --remove-orphans` 拆除共享数据库或数据卷。
+- **切入或升级分布式扩展**：执行 `scripts/deploy_mail_core.sh`。脚本在预检、密封备份与新镜像构建完成后、执行 `migrate` 之前，会停止并移除可能运行的嵌入式 `kkmail-mail-core-app` 容器并执行 `stop api worker`，确保单写者迁移并保留原有 `kkmail_mail_core_pg` / `kkmail_mail_core_blobs` 数据卷。
 
 两份 compose 文件均使用 Compose Specification，**不写**顶层 `version:`（该字段在现代 Docker Compose 中已废弃并被忽略）。
 
@@ -22,12 +25,12 @@ export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64;print(base64.b64enco
 
 # 单机默认（推荐）：单进程 + 内嵌 Worker，迁移先于业务写入
 docker compose -f docker-compose.embedded.yml up --build -d
-# 或使用部署脚本（会先停掉可能存在的分布式栈，确保两模式互斥，并等待 /ready）
+# 或使用部署脚本（先构建 app，再仅退场分布式计算容器，保留 PG 与数据卷并等待 /ready）
 scripts/deploy_embedded.sh
 
 # 或分布式扩展（可选）：迁移、API、独立 Worker 分离
 docker compose -f docker-compose.mail-core.yml --profile distributed up --build -d api worker
-# 分布式栈的完整 push/备份/迁移/回滚流程见 scripts/deploy_mail_core.sh
+# 分布式栈的完整 push/备份/停用嵌入式或旧计算容器/迁移/回滚流程见 scripts/deploy_mail_core.sh
 ```
 
 - 默认访问：`http://127.0.0.1:37281`。默认只把 API（主机 **37281**→容器 8000）和 PostgreSQL（主机 **5433**→容器 5432）发布到 `127.0.0.1`。若需通过本机 `.local` 主机名从局域网访问 API，设置 `MAIL_CORE_HOST_BIND=0.0.0.0` 后再启动 Compose，并访问 `http://<hostname>.local:37281`；这会监听主机 IPv4 接口。不要将端口直接暴露到公网，远程访问应放在 TLS 反向代理之后。文件里的 `imap` 服务是测试用 Dovecot 夹具（`127.0.0.1:1143`），部署时不要启动它（上面的命令只启动 `api` / `worker` 及其依赖）。
@@ -35,7 +38,13 @@ docker compose -f docker-compose.mail-core.yml --profile distributed up --build 
 - 可选：`MAIL_CORE_API_KEYS` 配置供脚本 / 集成使用的 Bearer Key（见 [docs/guides/security.md](security.md) 的「认证」与「授权模型」章节）。
 - `MAIL_CORE_BACKUP_KEY` 必须与 blob 密钥不同。密钥丢失 = 已归档邮件与凭据无法解密，请离线保存。
 - 局域网 HTTP 部署继续可用。会话 Cookie 的 Secure 属性按请求 scheme 自动推导（无配置项）：经 HTTP 访问时不带 Secure、会话可正常保持；经 HTTPS 访问时自动带 Secure。HTTP 不加密会话 Cookie；同一网络中能够监听流量的设备可能读取 Cookie。仅在可信局域网使用 HTTP；敏感远程访问应经过 TLS 反向代理，届时 Secure 自动生效。
-- `migrate` 服务先执行 `alembic upgrade head`，`api` / `worker` 在其成功后启动（distributed API 已配置 `MAIL_CORE_SKIP_MIGRATIONS=1` 与 `MAIL_CORE_EMBEDDED_WORKER=0`，独立 worker 实例 ID 为 `distributed-worker-1`；若单进程运行可通过 `MAIL_CORE_SKIP_MIGRATIONS=0 MAIL_CORE_EMBEDDED_WORKER=1` 启动）；`/ready` 会在数据库不可达、schema 未到 head 或 LISTEN 未就绪时返回 503。
+- `migrate` 服务先执行 `alembic upgrade head`，`api` / `worker` 在其成功后启动（distributed `api` 在 Compose 中硬编码固定 `MAIL_CORE_SKIP_MIGRATIONS=1` 与 `MAIL_CORE_EMBEDDED_WORKER=0`，不可通过环境变量覆盖；独立 worker 实例 ID 为 `distributed-worker-1`。如需单进程模式，请使用 `docker-compose.embedded.yml`）；`/ready` 会在数据库不可达、schema 未到 head 或 LISTEN 未就绪时返回 503。
+
+### 存活探针、`/tmp` tmpfs 与故障恢复责任
+
+- **隔离 `/tmp` tmpfs**：`app`、`api`、`worker` 服务均挂载 `tmpfs: ["/tmp:rw,nosuid,nodev,size=16m"]`，使 Worker 存活戳文件（`/tmp/kkmail-worker-liveness.json`）在内存中原子刷新，避免宿主磁盘写抖动阻塞探针。
+- **Worker 主循环内建看门狗 + `restart: unless-stopped`**：独立心跳线程内置主循环停滞看门狗（`MAIL_CORE_WORKER_WATCHDOG_TIMEOUT`，默认按健康检查/空闲等待上界自动派生，设为 `0` 可禁用）。若 Worker 主循环超过阈值未推进，进程记录 `CRITICAL` 日志并立即退出（`os._exit(1)`），由 Docker Compose 的 `restart: unless-stopped` 直接拉起新容器（无需挂载特权 `docker.sock`）。
+- **外部编排器对其他 `unhealthy` 状态的责任**：Docker 原生 `restart: unless-stopped` 仅在容器进程退出时重启，不会因健康检查变为 `unhealthy` 而自动重启仍在运行的容器。对于数据库异常、API 进程外部卡死等导致容器持续 `unhealthy` 但未主动退出的故障，自动重启与告警处置由外部编排器或运维监控系统负责（例如 systemd / Kubernetes / Nomad 重启策略或人工执行 `docker compose restart`）。
 
 ## 基础镜像基线（离线可复现构建）
 
