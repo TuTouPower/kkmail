@@ -1,7 +1,7 @@
 ---
 slug: mail_sync_and_storage
 status: active
-tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090, t091, t092]
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090, t091, t092, t095]
 ---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
@@ -52,6 +52,7 @@ ______________________________________________________________________
 3. **执行跟踪与孤儿清理**：
     - 同步作业持有唯一的执行代际 UUID，请求通过关联表绑定具体代次；
     - 孤儿任务由后台 Reaper 定期收敛，全量扫描通过 `scan_generation` 防止半扫描引发误删。
+4. **单机运行时资源收敛与巡检探针边界**（t095）：单机自托管默认以单进程嵌入式编排（`docker-compose.embedded.yml`，API + 内嵌 Worker，进程先迁移后启动），分布式双进程为可选 profile，两种形态互斥、共享数据卷；连接池、IDLE 配额与执行槽位由 `mail_core/runtime_budget.py` 单一来源派生（单机默认 4/4 池、8 IDLE 配额），并为 API/后台/维护/LISTEN 直连预留。全夹巡检以账号级门禁统一：首个账号级传输/认证失败写账号级 patrol 冷却并短路本轮剩余目录，跨轮冷却由 `account.config` 持有、单一 sweeper 无并发半开；后台传输失败继续隔离（t090）不污染 `connectivity_state`，永久认证失败走凭据状态，单目录错误只影响该目录，共享端点其他账号不受牵连。探针与业务读解耦：`/ready` 全走 Core Connection（`AUTOCOMMIT`，无 ORM Session/ROLLBACK）且只缓存 worker 信号（短 TTL，DB/schema/LISTEN 每次读新值、断开立即失效），Worker 主循环刷新 tmpfs 存活戳供容器探针校验新鲜度（不冷启查库），三类 healthcheck interval 统一 30s；仅独立心跳等可丢弃状态允许异步提交，邮件/checkpoint/Outbox/同步请求结算及带远端副作用的业务事务保持同步提交。
 
 ______________________________________________________________________
 

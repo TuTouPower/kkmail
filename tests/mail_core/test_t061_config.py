@@ -9,9 +9,16 @@ from mail_core.config.models import ConfigError
 
 
 def test_t061_config_defaults():
+    """t095: IDLE quota now derives from the single runtime budget (rewritten).
+
+    The old assertion pinned idle_quota=32; t095 converges single-host defaults
+    to 8 via ``runtime_budget``. All other IDLE/patrol defaults are unchanged.
+    """
+    from mail_core import runtime_budget
+
     cfg = load_config({})
     assert cfg.idle_enabled is True
-    assert cfg.idle_quota == 32
+    assert cfg.idle_quota == runtime_budget.DEFAULT_IDLE_QUOTA
     assert cfg.idle_max_duration_s == 1680.0
     assert cfg.idle_backoff_base_s == 5.0
     assert cfg.idle_backoff_max_s == 300.0
@@ -26,7 +33,7 @@ def test_t061_config_env_overrides():
     cfg = load_config(
         {
             "MAIL_CORE_IDLE_ENABLED": "0",
-            "MAIL_CORE_IDLE_QUOTA": "8",
+            "MAIL_CORE_IDLE_QUOTA": "6",
             "MAIL_CORE_IDLE_MAX_DURATION_S": "900",
             "MAIL_CORE_IDLE_BACKOFF_BASE_S": "1.5",
             "MAIL_CORE_IDLE_BACKOFF_MAX_S": "60",
@@ -38,7 +45,7 @@ def test_t061_config_env_overrides():
         }
     )
     assert cfg.idle_enabled is False
-    assert cfg.idle_quota == 8
+    assert cfg.idle_quota == 6
     assert cfg.idle_max_duration_s == 900.0
     assert cfg.idle_backoff_base_s == 1.5
     assert cfg.idle_backoff_max_s == 60.0

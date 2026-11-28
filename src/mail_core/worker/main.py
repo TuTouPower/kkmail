@@ -600,6 +600,7 @@ def run(poll_interval_s: float | None = None, schedule_interval_s: float | None 
     last_reclaim_at: float | None = None
     last_schedule_at: float | None = None
     schedule_thread: threading.Thread | None = None
+    loop_progress = 0
 
     from mail_core.db.session import get_session_factory
     from mail_core.worker.heartbeat import WorkerHeartbeatLoop
@@ -637,6 +638,16 @@ def run(poll_interval_s: float | None = None, schedule_interval_s: float | None 
     try:
         while not _stop and not _stop_event.is_set():
             now = time.monotonic()
+            # t095 AC-005: refresh the filesystem liveness stamp each loop so
+            # a probe can verify the main loop is alive AND progressing without
+            # a DB query or cold interpreter start.
+            loop_progress += 1
+            try:
+                from mail_core.liveness import write_liveness_stamp
+
+                write_liveness_stamp(progress=loop_progress, worker_id=worker_id)
+            except Exception:
+                pass  # liveness is best-effort; DB heartbeats remain authoritative
             if last_reclaim_at is None or now - last_reclaim_at >= reclaim_interval:
                 last_reclaim_at = now
                 try:

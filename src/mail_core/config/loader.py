@@ -6,6 +6,7 @@ import os
 from typing import Any, Mapping
 
 from mail_core.config.models import ConfigError, MailCoreConfig
+from mail_core import runtime_budget
 
 _BOOL_TRUE = frozenset({"1", "true", "yes", "on"})
 _BOOL_FALSE = frozenset({"0", "false", "no", "off"})
@@ -85,8 +86,8 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
         proxy_headers=_parse_bool(source.get("MAIL_CORE_PROXY_HEADERS"), False),
         **_load_outbound_network_fields(source),
         database_url=source.get("MAIL_CORE_DATABASE_URL") or "",
-        db_pool_size=_parse_int(source.get("MAIL_CORE_DB_POOL_SIZE"), 10, "db_pool_size"),
-        db_max_overflow=_parse_int(source.get("MAIL_CORE_DB_MAX_OVERFLOW"), 10, "db_max_overflow"),
+        db_pool_size=_parse_int(source.get("MAIL_CORE_DB_POOL_SIZE"), runtime_budget.DEFAULT_DB_POOL_SIZE, "db_pool_size"),
+        db_max_overflow=_parse_int(source.get("MAIL_CORE_DB_MAX_OVERFLOW"), runtime_budget.DEFAULT_DB_MAX_OVERFLOW, "db_max_overflow"),
         db_pool_timeout=_parse_float(source.get("MAIL_CORE_DB_POOL_TIMEOUT"), 30.0, "db_pool_timeout"),
         db_pool_recycle=_parse_int(source.get("MAIL_CORE_DB_POOL_RECYCLE"), 1800, "db_pool_recycle"),
         total_slots=_parse_int(source.get("MAIL_CORE_TOTAL_SLOTS"), 8, "total_slots"),
@@ -119,7 +120,7 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
             source.get("MAIL_CORE_SCHEDULE_INTERVAL_S"), 60.0, "schedule_interval_s"
         ),
         idle_enabled=_parse_bool(source.get("MAIL_CORE_IDLE_ENABLED"), True),
-        idle_quota=_parse_int(source.get("MAIL_CORE_IDLE_QUOTA"), 32, "idle_quota"),
+        idle_quota=_parse_int(source.get("MAIL_CORE_IDLE_QUOTA"), runtime_budget.DEFAULT_IDLE_QUOTA, "idle_quota"),
         idle_max_duration_s=_parse_float(
             source.get("MAIL_CORE_IDLE_MAX_DURATION_S"), 1680.0, "idle_max_duration_s"
         ),

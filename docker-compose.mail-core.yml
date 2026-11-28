@@ -38,9 +38,22 @@ services:
       - "127.0.0.1:5433:5432"
     volumes:
       - kkmail_mail_core_pg:/var/lib/postgresql/data
+    # t095 AC-006: single-host workload tuning. Keep synchronous_commit ON
+    # (durability) and lengthen the checkpoint interval to remove the 5-min
+    # flush stalls; connection ceiling matches the 16-client runtime budget.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - max_connections=40
+      - -c
+      - checkpoint_timeout=15min
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U kkmail -d kkmail_mail"]
-      interval: 3s
+      interval: 30s
       timeout: 3s
       retries: 20
 
@@ -148,7 +161,7 @@ services:
         required: false
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/ready || exit 1"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 20
     # Distributed API mode: migrations and worker handled by separate containers.
@@ -181,7 +194,7 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-m", "mail_core.worker.healthcheck"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s

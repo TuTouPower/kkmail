@@ -1,0 +1,15 @@
+{
+  "tid": "t095",
+  "attempt": 1,
+  "execution_id": "0712fc93d1f0410486ffb52d86f60be5",
+  "status": "done",
+  "branch": "t095_single_process_runtime_resource_convergence",
+  "base_sha": "982235be027f84cf3fb88039d80348c53f7e01b5",
+  "spec_source_sha": "982235be027f84cf3fb88039d80348c53f7e01b5",
+  "tests": "全量 unit 1507 passed/0 failed；t095 DB 专项 10 passed；相关 DB 子集 108 passed；黑盒 E2E 26 passed；模板契约 389 passed；敏感扫描 0 违规；compose 双模式 config --quiet 通过",
+  "blackbox": "快速 E2E 26 passed",
+  "review": "code 四轮 PASS、test 四轮 PASS；7/7 AC TICK-VALID",
+  "review_scope": "d04e6f814286766f",
+  "pending": [],
+  "findings": []
+}

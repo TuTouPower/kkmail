@@ -4,7 +4,14 @@ kkmail 只有一种服务端形态：mail-core API + worker + PostgreSQL，SPA �
 
 ## Docker Compose
 
-`docker-compose.mail-core.yml` 使用 Compose Specification，**不写**顶层 `version:`（该字段在现代 Docker Compose 中已废弃并被忽略）。
+kkmail 提供两种**互斥**的运行形态，通过不同的 compose 文件区分，绝不存在同时启用两套 Worker 的路径：
+
+- **单机默认（嵌入式单进程）**：`docker-compose.embedded.yml`，API 与 Worker 在同一 Python 进程，进程自身先执行迁移再启动（此形态为单机自托管的推荐入口）。
+- **分布式扩展（可选）**：`docker-compose.mail-core.yml` + `--profile distributed`，API 与 Worker 为独立容器，面向多机 / 高吞吐。
+
+两个文件使用相同的 `kkmail_mail_core_pg` / `kkmail_mail_core_blobs` 数据卷，可在两种模式间切换而沿用数据；切换时先停掉当前模式的全部容器再启动另一模式。所有命令都显式带 `-f`，避免误用默认文件。
+
+两份 compose 文件均使用 Compose Specification，**不写**顶层 `version:`（该字段在现代 Docker Compose 中已废弃并被忽略）。
 
 ```bash
 export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
@@ -13,7 +20,14 @@ export MAIL_CORE_LOGIN_PASSWORD='<强密码>'            # 或 MAIL_CORE_LOGIN_P
 export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
 export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
 
-docker compose -f docker-compose.mail-core.yml --profile distributed up --build -d api worker   # 依赖会自动拉起 postgres 与 migrate；api/worker/migrate 均在 distributed profile 后，无 profile 的裸 up 不是受支持路径
+# 单机默认（推荐）：单进程 + 内嵌 Worker，迁移先于业务写入
+docker compose -f docker-compose.embedded.yml up --build -d
+# 或使用部署脚本（会先停掉可能存在的分布式栈，确保两模式互斥，并等待 /ready）
+scripts/deploy_embedded.sh
+
+# 或分布式扩展（可选）：迁移、API、独立 Worker 分离
+docker compose -f docker-compose.mail-core.yml --profile distributed up --build -d api worker
+# 分布式栈的完整 push/备份/迁移/回滚流程见 scripts/deploy_mail_core.sh
 ```
 
 - 默认访问：`http://127.0.0.1:37281`。默认只把 API（主机 **37281**→容器 8000）和 PostgreSQL（主机 **5433**→容器 5432）发布到 `127.0.0.1`。若需通过本机 `.local` 主机名从局域网访问 API，设置 `MAIL_CORE_HOST_BIND=0.0.0.0` 后再启动 Compose，并访问 `http://<hostname>.local:37281`；这会监听主机 IPv4 接口。不要将端口直接暴露到公网，远程访问应放在 TLS 反向代理之后。文件里的 `imap` 服务是测试用 Dovecot 夹具（`127.0.0.1:1143`），部署时不要启动它（上面的命令只启动 `api` / `worker` 及其依赖）。

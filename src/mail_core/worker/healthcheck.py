@@ -1,47 +1,48 @@
-"""Healthcheck CLI command for container probes."""
+"""Healthcheck CLI command for container probes (t095 AC-005).
+
+Liveness is verified from the worker's filesystem stamp alone: no Python
+interpreter cold-start into SQLAlchemy, no DB connection, no ROLLBACK. The
+stamp's mtime proves the main loop refreshed it recently; its progress counter
+is carried for diagnostics. Database readiness stays the API's ``/ready``
+concern.
+"""
 
 from __future__ import annotations
 
 import math
 import os
 import sys
+import time
+from pathlib import Path
 
-from mail_core.db.session import get_session_factory
-from mail_core.worker.heartbeat import get_worker_heartbeats
+from mail_core.liveness import read_liveness_stamp, stamp_path
 
 
 def main() -> int:
     try:
-        worker_id = os.environ.get("MAIL_CORE_WORKER_ID")
-        # A294: parse inside the try and require a finite positive value;
-        # the old bare float() outside the try crashed with a traceback
-        # on an invalid env value.
-        stale_threshold = float(os.environ.get("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG", "60.0"))
-        if not math.isfinite(stale_threshold) or stale_threshold <= 0:
-            raise ValueError("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG must be a finite positive number")
+        max_lag = float(os.environ.get("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG", "60.0"))
+        if not math.isfinite(max_lag) or max_lag <= 0:
+            raise ValueError("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG must be finite > 0")
 
-        Session = get_session_factory()
-        with Session() as session:
-            is_healthy, lag, workers = get_worker_heartbeats(
-                session, stale_after_seconds=stale_threshold
-            )
-            if worker_id:
-                matching = [w for w in workers if w.get("worker_id") == worker_id and w.get("active")]
-                if not matching:
-                    print(f"worker {worker_id} heartbeat missing or stale", file=sys.stderr)
-                    return 1
-                print(f"worker {worker_id} healthy (lag={matching[0].get('lag_seconds')}s)")
-                return 0
-
-            if not is_healthy:
-                print("no active worker heartbeats found", file=sys.stderr)
-                return 1
-
-            print(f"workers healthy (min_lag={lag}s, count={len(workers)})")
-            return 0
+        path: Path = stamp_path()
+        stamp = read_liveness_stamp(path)
+        if stamp is None:
+            print("worker liveness stamp missing", file=sys.stderr)
+            return 1
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            print("worker liveness stamp unreadable", file=sys.stderr)
+            return 1
+        if age > max_lag:
+            print(f"worker liveness stamp stale ({age:.1f}s)", file=sys.stderr)
+            return 1
+        print(
+            f"worker alive (stamp_age={age:.1f}s, progress={stamp.get('progress')}, "
+            f"worker_id={stamp.get('worker_id')})"
+        )
+        return 0
     except Exception as exc:
-        # A294: type name only — exception text can embed DB connection
-        # details and must not reach the probe's stderr verbatim.
         print(f"worker healthcheck error: {type(exc).__name__}", file=sys.stderr)
         return 1
 

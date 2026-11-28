@@ -231,16 +231,26 @@ def ready():
         body = ReadyOut(status="not_ready", schema_revision=rev, schema_head=head, listener=False, reason="outbox_listener")
         return JSONResponse(status_code=503, content=body.model_dump())
 
-    worker_ok = None
+    # t095 AC-005: worker state is read with a Core connection (no ORM
+    # Session/ROLLBACK) and cached for a short TTL; DB/schema/LISTEN are read
+    # fresh on every call so a disconnect is never masked by the cache.
+    worker_ok: bool | None = None
     try:
-        from mail_core.db.session import get_session_factory
-        from mail_core.worker.heartbeat import get_worker_heartbeats
+        from mail_core.db.session import get_engine
+        from mail_core.readiness import get_readiness_probe, read_worker_active_via_core
 
-        Session = get_session_factory()
-        with Session() as session:
-            worker_ok, _, _ = get_worker_heartbeats(session)
+        probe = get_readiness_probe()
+        # Cache only the worker-derived signal; schema/listener stay fresh.
+        worker_ok = probe.cached_worker_active()
+        if worker_ok is None:
+            worker_ok, _lag = read_worker_active_via_core(get_engine())
+            probe.snapshot(
+                schema_revision=rev,
+                listener_ready=listener_ok,
+                worker_active=worker_ok,
+            )
     except Exception:
-        pass
+        worker_ok = None
 
     if os.environ.get("MAIL_CORE_REQUIRE_WORKER_READY") == "1" and not worker_ok:
         body = ReadyOut(

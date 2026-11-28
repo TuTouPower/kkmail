@@ -183,10 +183,17 @@ def test_api_system_health_endpoint(monkeypatch):
 
 
 def test_ready_endpoint_with_worker_flag(monkeypatch):
-    mock_session = MagicMock()
-    monkeypatch.setattr("mail_core.db.session.get_session_factory", lambda: lambda: mock_session)
+    """t095: /ready derives worker state from Core + liveness stamp (rewritten).
+
+    The old test patched the ORM ``get_worker_heartbeats``; t095 reads worker
+    state via ``read_worker_active_via_core`` (AUTOCOMMIT, no ROLLBACK) with a
+    short TTL cache, so the patch seam moved there.
+    """
     monkeypatch.setattr("mail_core.api.app._code_schema_head", lambda: "head-1")
     monkeypatch.setattr("mail_core.mail.storage.health.get_current_schema_revision", lambda: "head-1")
+    monkeypatch.setattr("mail_core.readiness.get_readiness_probe", lambda: _FreshProbe())
+    # read_worker_active_via_core is patched below; the engine arg is unused.
+    monkeypatch.setattr("mail_core.db.session.get_engine", lambda *a, **k: object())
 
     class FakeListener:
         listen_ready = True
@@ -195,56 +202,65 @@ def test_ready_endpoint_with_worker_flag(monkeypatch):
 
     # When worker is not running:
     monkeypatch.setattr(
-        "mail_core.worker.heartbeat.get_worker_heartbeats",
-        lambda _session: (False, None, []),
+        "mail_core.readiness.read_worker_active_via_core",
+        lambda _engine: (False, None),
     )
-
     client = TestClient(app)
-    # Default require_worker not set -> returns 200, worker=False
     res = client.get("/ready")
     assert res.status_code == 200
     assert res.json()["worker"] is False
 
-    # When MAIL_CORE_REQUIRE_WORKER_READY=1 -> returns 503
     monkeypatch.setenv("MAIL_CORE_REQUIRE_WORKER_READY", "1")
     res_fail = client.get("/ready")
     assert res_fail.status_code == 503
     assert res_fail.json()["reason"] == "worker_not_running"
 
-    # When worker is active -> returns 200, worker=True
+    # When worker is active:
     monkeypatch.setattr(
-        "mail_core.worker.heartbeat.get_worker_heartbeats",
-        lambda _session: (True, 5.0, [{"worker_id": "worker-1"}]),
+        "mail_core.readiness.read_worker_active_via_core",
+        lambda _engine: (True, 5.0),
     )
     res_ok = client.get("/ready")
     assert res_ok.status_code == 200
     assert res_ok.json()["worker"] is True
+    monkeypatch.delenv("MAIL_CORE_REQUIRE_WORKER_READY")
 
 
-def test_worker_healthcheck_cli(monkeypatch):
-    mock_session = MagicMock()
-    monkeypatch.setattr("mail_core.worker.healthcheck.get_session_factory", lambda: lambda: mock_session)
+class _FreshProbe:
+    """Readiness probe whose cache never serves a stale worker value."""
 
-    # Case 1: no active workers -> exit 1
-    monkeypatch.setattr(
-        "mail_core.worker.healthcheck.get_worker_heartbeats",
-        lambda _session, **_kwargs: (False, None, []),
-    )
+    def cached_worker_active(self):
+        return None
+
+    def snapshot(self, **_kwargs):
+        return None
+
+
+def test_worker_healthcheck_cli(monkeypatch, tmp_path):
+    """t095: healthcheck verifies the liveness stamp (rewritten)."""
+    from mail_core.liveness import write_liveness_stamp
+
+    stamp = tmp_path / "liveness.json"
+    monkeypatch.setenv("MAIL_CORE_LIVENESS_STAMP", str(stamp))
+
+    # Case 1: no stamp -> exit 1
+    monkeypatch.delenv("MAIL_CORE_WORKER_ID", raising=False)
     assert healthcheck_main() == 1
 
-    # Case 2: active workers -> exit 0
-    monkeypatch.setattr(
-        "mail_core.worker.healthcheck.get_worker_heartbeats",
-        lambda _session, **_kwargs: (True, 2.0, [{"worker_id": "w1", "active": True, "lag_seconds": 2.0}]),
-    )
+    # Case 2: fresh stamp -> exit 0
+    write_liveness_stamp(stamp, progress=1, worker_id="w1")
     assert healthcheck_main() == 0
 
-    # Case 3: specific worker ID matching
-    monkeypatch.setenv("MAIL_CORE_WORKER_ID", "w1")
-    assert healthcheck_main() == 0
-
-    # Case 4: specific worker ID not matching
+    # Case 3: worker id in stamp does not gate a file-based probe.
     monkeypatch.setenv("MAIL_CORE_WORKER_ID", "w2")
+    assert healthcheck_main() == 0
+    monkeypatch.delenv("MAIL_CORE_WORKER_ID")
+
+    # Case 4: stale stamp -> exit 1
+    import os as _os
+
+    _os.utime(stamp, (stamp.stat().st_atime, stamp.stat().st_mtime - 3600))
+    monkeypatch.setenv("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG", "60")
     assert healthcheck_main() == 1
 
 
