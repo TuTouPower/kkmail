@@ -1028,3 +1028,188 @@ def test_ac005_production_orm_queries_use_partial_indexes_under_force_generic_pl
             assert "Seq Scan" not in plans[active_label], plans[active_label]
 
         session.rollback()
+
+
+def test_ac007_prune_completed_jobs_enforces_limit_bounds():
+    """AC-007: limit <= 0 returns 0 and oversized limits are capped at COMPLETED_JOB_PRUNE_BATCH."""
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.retention import COMPLETED_JOB_PRUNE_BATCH
+
+    Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    with Session() as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO worker_jobs (id, job_type, execution_origin, status, updated_at)
+                SELECT gen_random_uuid(), 'sync_folder_delta', 'background', 'done',
+                       :now - interval '48 hours' - (n || ' milliseconds')::interval
+                FROM generate_series(1, :total) AS n
+                """
+            ),
+            {"now": now, "total": COMPLETED_JOB_PRUNE_BATCH + 50},
+        )
+        session.commit()
+
+    with Session() as session:
+        assert prune_completed_jobs(session, now=now, limit=0) == 0
+        assert prune_completed_jobs(session, now=now, limit=-5) == 0
+        deleted = prune_completed_jobs(
+            session, now=now, limit=COMPLETED_JOB_PRUNE_BATCH * 4
+        )
+        assert deleted == COMPLETED_JOB_PRUNE_BATCH
+        session.commit()
+
+    with Session() as session:
+        remaining = session.scalar(text("SELECT count(*) FROM worker_jobs"))
+        assert remaining == 50
+
+
+def test_ac007_steady_state_drain_80k_jobs_and_86k_outbox_preserves_fresh():
+    """AC-007: drain 80k expired worker_jobs + 86k expired outbox rows across
+    bounded 5,000-row sweeps to zero expired rows while preserving <24h rows.
+    """
+    from mail_core.db.session import get_session_factory
+    from mail_core.realtime.outbox import prune_published, pruned_through_seq
+    from mail_core.realtime.publication import get_publication_state
+    from mail_core.sync.retention import (
+        COMPLETED_JOB_PRUNE_BATCH,
+        PUBLISHED_OUTBOX_PRUNE_BATCH,
+    )
+
+    Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    expired_jobs_n = 80_000
+    fresh_terminal_jobs_n = 80
+    active_jobs_n = 40
+    expired_outbox_n = 86_000
+    fresh_outbox_n = 150
+    unpublished_outbox_n = 25
+
+    with Session() as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO worker_jobs (id, job_type, execution_origin, status, updated_at)
+                SELECT gen_random_uuid(), 'sync_folder_delta', 'background',
+                       CASE WHEN n % 2 = 0 THEN 'done' ELSE 'failed' END,
+                       :now - interval '25 hours' - (n || ' milliseconds')::interval
+                FROM generate_series(1, :expired_jobs_n) AS n
+                """
+            ),
+            {"now": now, "expired_jobs_n": expired_jobs_n},
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO worker_jobs (id, job_type, execution_origin, status, updated_at)
+                SELECT gen_random_uuid(), 'sync_folder_delta', 'background',
+                       CASE WHEN n <= :fresh_terminal_jobs_n THEN 'done' ELSE 'pending' END,
+                       :now - interval '1 hour'
+                FROM generate_series(1, :fresh_total) AS n
+                """
+            ),
+            {
+                "now": now,
+                "fresh_terminal_jobs_n": fresh_terminal_jobs_n,
+                "fresh_total": fresh_terminal_jobs_n + active_jobs_n,
+            },
+        )
+
+        pub_state = get_publication_state(session, with_for_update=True)
+        base_seq = int(pub_state.next_seq)
+        session.execute(
+            text(
+                """
+                INSERT INTO outbox (event_type, payload, created_at, publication_seq, published_at)
+                SELECT 'sync.progress', '{}'::jsonb,
+                       :now - interval '26 hours',
+                       :base_seq + n - 1,
+                       :now - interval '25 hours'
+                FROM generate_series(1, :expired_outbox_n) AS n
+                """
+            ),
+            {"now": now, "base_seq": base_seq, "expired_outbox_n": expired_outbox_n},
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO outbox (event_type, payload, created_at, publication_seq, published_at)
+                SELECT 'sync.progress', '{}'::jsonb,
+                       :now - interval '2 hours',
+                       :fresh_base + n - 1,
+                       :now - interval '1 hour'
+                FROM generate_series(1, :fresh_outbox_n) AS n
+                """
+            ),
+            {
+                "now": now,
+                "fresh_base": base_seq + expired_outbox_n,
+                "fresh_outbox_n": fresh_outbox_n,
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO outbox (event_type, payload, created_at)
+                SELECT 'sync.progress', '{}'::jsonb, :now - interval '48 hours'
+                FROM generate_series(1, :unpublished_outbox_n) AS n
+                """
+            ),
+            {"now": now, "unpublished_outbox_n": unpublished_outbox_n},
+        )
+        pub_state.next_seq = base_seq + expired_outbox_n + fresh_outbox_n
+        session.commit()
+
+    jobs_deleted_total = 0
+    job_sweeps = 0
+    while True:
+        with Session() as session:
+            deleted = prune_completed_jobs(session, now=now)
+            assert deleted <= COMPLETED_JOB_PRUNE_BATCH
+            session.commit()
+        jobs_deleted_total += deleted
+        if deleted == 0:
+            break
+        job_sweeps += 1
+        assert job_sweeps <= 25
+
+    outbox_deleted_total = 0
+    outbox_sweeps = 0
+    while True:
+        with Session() as session:
+            deleted = prune_published(session, now=now)
+            assert deleted <= PUBLISHED_OUTBOX_PRUNE_BATCH
+            session.commit()
+        outbox_deleted_total += deleted
+        if deleted == 0:
+            break
+        outbox_sweeps += 1
+        assert outbox_sweeps <= 25
+
+    assert jobs_deleted_total == expired_jobs_n
+    assert outbox_deleted_total == expired_outbox_n
+
+    cutoff = now - timedelta(hours=24)
+    with Session() as session:
+        expired_jobs_left = session.scalar(
+            text(
+                "SELECT count(*) FROM worker_jobs "
+                "WHERE status IN ('done', 'failed') AND updated_at < :cutoff"
+            ),
+            {"cutoff": cutoff},
+        )
+        total_jobs_left = session.scalar(text("SELECT count(*) FROM worker_jobs"))
+        expired_outbox_left = session.scalar(
+            text(
+                "SELECT count(*) FROM outbox "
+                "WHERE publication_seq IS NOT NULL AND published_at < :cutoff"
+            ),
+            {"cutoff": cutoff},
+        )
+        total_outbox_left = session.scalar(text("SELECT count(*) FROM outbox"))
+        assert expired_jobs_left == 0
+        assert total_jobs_left == fresh_terminal_jobs_n + active_jobs_n
+        assert expired_outbox_left == 0
+        assert total_outbox_left == fresh_outbox_n + unpublished_outbox_n
+        assert pruned_through_seq(session) == base_seq + expired_outbox_n - 1

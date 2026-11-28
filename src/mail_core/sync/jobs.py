@@ -827,6 +827,9 @@ def prune_completed_jobs(
     targets remain open. Only jobs whose links belong exclusively to already-
     settled targets and settled parent requests are reclaimable.
     """
+    if int(limit) <= 0:
+        return 0
+    effective_limit = min(int(limit), COMPLETED_JOB_PRUNE_BATCH)
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
     open_target_link = exists(
@@ -861,7 +864,7 @@ def prune_completed_jobs(
             .where(~open_target_link)
             .where(~open_request_link)
             .order_by(WorkerJob.updated_at.asc())
-            .limit(max(1, int(limit)))
+            .limit(effective_limit)
         ).all()
     )
     if not ids:
