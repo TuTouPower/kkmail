@@ -9,17 +9,16 @@ DB/LISTEN transitions invalidate it immediately.
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
-from mail_core.liveness import read_liveness_stamp, stamp_path
+from mail_core.config.loader import resolve_embedded_worker
+from mail_core.liveness import read_liveness_stamp, stamp_path, stamp_required
 
 DEFAULT_TTL_S = 5.0
 
@@ -127,19 +126,20 @@ def read_worker_active_via_core(engine: Any, *, stale_after_s: float = 60.0) -> 
             active = True
             if min_lag is None or lag < min_lag:
                 min_lag = lag
-    # t095 AC-005 / t096 AC-005: only check the local worker liveness stamp when
-    # running an embedded worker or when MAIL_CORE_LIVENESS_STAMP is explicitly
-    # configured; a distributed API process must not read a stray /tmp stamp.
-    check_local_stamp = bool(
-        (os.environ.get("MAIL_CORE_LIVENESS_STAMP") or "").strip()
-    ) or (os.environ.get("MAIL_CORE_EMBEDDED_WORKER") != "0")
-    if check_local_stamp:
+    # t095 AC-005 / t096 AC-005 / t098: only check the local worker liveness
+    # stamp when the effective mode requires one (embedded worker running, or
+    # an explicitly configured stamp path); a distributed API process must not
+    # read a stray /tmp stamp. The effective mode comes from the single
+    # resolver shared with startup, so a CLI --no-worker launch and
+    # MAIL_CORE_EMBEDDED_WORKER=0 are indistinguishable here.
+    if stamp_required(embedded_worker=resolve_embedded_worker()):
+        path = stamp_path()
         stamp = read_liveness_stamp()
         if not isinstance(stamp, dict):
             active = False
         else:
             try:
-                age = time.time() - Path(stamp_path()).stat().st_mtime
+                age = time.time() - path.stat().st_mtime
                 if age > stale_after_s:
                     active = False
             except OSError:

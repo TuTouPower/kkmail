@@ -241,6 +241,17 @@ def main(argv: list[str] | None = None) -> int | None:
     parser.add_argument("--force", action="store_true", help="Re-run label backfill even for completed accounts.")
     args = parser.parse_args(argv)
 
+    # t098: merge CLI and environment once at the startup boundary and publish
+    # the effective worker mode, so the worker-thread decision below, the
+    # loaded config and the /ready probe all observe the same mode. Without
+    # this, --no-worker stopped the thread while the probe still expected an
+    # embedded worker's liveness stamp (503 where MAIL_CORE_EMBEDDED_WORKER=0
+    # returned 200).
+    from mail_core.config.loader import resolve_embedded_worker
+
+    embedded_worker = resolve_embedded_worker(cli_no_worker=args.no_worker)
+    os.environ["MAIL_CORE_EMBEDDED_WORKER"] = "1" if embedded_worker else "0"
+
     if args.migrate_only or args.check_migrations:
         # Gate flags run before get_config() and ignore MAIL_CORE_SKIP_MIGRATIONS.
         from mail_core.db.session import DatabaseConfigError
@@ -275,7 +286,7 @@ def main(argv: list[str] | None = None) -> int | None:
         run_migrations()
     if args.backfill_gmail_labels:
         return _run_label_backfill(args, parser)
-    if not args.no_worker:
+    if embedded_worker:
         from mail_core.worker import main as worker_main
 
         threading.Thread(target=worker_main.run, name="mail-core-worker", daemon=True).start()
