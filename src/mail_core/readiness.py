@@ -9,9 +9,12 @@ DB/LISTEN transitions invalidate it immediately.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -103,7 +106,7 @@ def read_worker_active_via_core(engine: Any, *, stale_after_s: float = 60.0) -> 
         _parse_heartbeat_row,
     )
 
-    now_dt = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    now_dt = datetime.now(timezone.utc)
     # AUTOCOMMIT: a plain Core Connection in an implicit transaction emits a
     # ROLLBACK on close; readiness reads must be strictly read-only with zero
     # rollback traffic (the 232k ROLLBACK root cause).
@@ -124,17 +127,19 @@ def read_worker_active_via_core(engine: Any, *, stale_after_s: float = 60.0) -> 
             active = True
             if min_lag is None or lag < min_lag:
                 min_lag = lag
-    # t095 AC-005: in embedded mode the worker main loop writes a local
-    # liveness stamp. A stalled main loop keeps DB heartbeats alive via their
-    # independent thread, so also require the stamp to be fresh when present.
-    stamp = read_liveness_stamp()
-    if stamp is not None:
-        try:
-            from pathlib import Path
-
-            age = time.time() - Path(stamp_path()).stat().st_mtime
-            if age > stale_after_s:
+    # t095 AC-005 / t096 AC-005: only check the local worker liveness stamp when
+    # running an embedded worker or when MAIL_CORE_LIVENESS_STAMP is explicitly
+    # configured; a distributed API process must not read a stray /tmp stamp.
+    check_local_stamp = bool(
+        (os.environ.get("MAIL_CORE_LIVENESS_STAMP") or "").strip()
+    ) or (os.environ.get("MAIL_CORE_EMBEDDED_WORKER") != "0")
+    if check_local_stamp:
+        stamp = read_liveness_stamp()
+        if stamp is not None:
+            try:
+                age = time.time() - Path(stamp_path()).stat().st_mtime
+                if age > stale_after_s:
+                    active = False
+            except OSError:
                 active = False
-        except OSError:
-            active = False
     return active, min_lag

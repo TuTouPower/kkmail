@@ -1,7 +1,7 @@
 ---
 slug: mail_sync_and_storage
 status: active
-tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090, t091, t092, t094, t095]
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t086, t087, t088, t089, t090, t091, t092, t094, t095, t096]
 ---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
@@ -53,7 +53,7 @@ ______________________________________________________________________
     - 同步作业持有唯一的执行代际 UUID，请求通过关联表绑定具体代次；
     - 孤儿任务由后台 Reaper 定期收敛，全量扫描通过 `scan_generation` 防止半扫描引发误删。
 4. **增量同步水位权威与瞬态队列生命周期**（t094）：`sync_checkpoints.last_delta_settled_at` 是周期收件箱增量轮询的唯一调度水位，表示最近一次 delta 执行链结算时间（成功、跳过、重试耗尽均推进；续页、限流、容量延期、游标失效转重建、失锁等中间态不推进），以单调推进保证过期执行晚提交也不能回退水位；三状态首次排期契约为「无完整基线或重建中不排 delta（由元数据发现链建立基线）、基线就绪且水位为空时立即到期、水位已置按轮询间隔判定」；周期调度不再读取 `worker_jobs` 终态历史（消除全表扫描），仅以活跃态任务做去重。终态 `worker_jobs` 与已发布 `outbox` 为瞬态传输缓冲，默认保留 24h（代码常量，无产品级开关），回收仅删除已发布连续前缀并原子推进 `pruned_through_seq`，SSE/分发游标落后窗口触发 `resync`；终态任务若其 link 仍关联未结算的同步请求目标则暂不回收，避免重聚合丢失失败结果；大批量回收后按需 `ANALYZE`，并洗净 `from_text` 上重复的 GIN 三元组索引，仅保留 ORM 声明的唯一索引。
-5. **单机运行时资源收敛与巡检探针边界**（t095）：单机自托管默认以单进程嵌入式编排（`docker-compose.embedded.yml`，API + 内嵌 Worker，进程先迁移后启动），分布式双进程为可选 profile，两种形态互斥、共享数据卷；连接池、IDLE 配额与执行槽位由 `mail_core/runtime_budget.py` 单一来源派生（单机默认 4/4 池、8 IDLE 配额），并为 API/后台/维护/LISTEN 直连预留。全夹巡检以账号级门禁统一：首个账号级传输/认证失败写账号级 patrol 冷却并短路本轮剩余目录，跨轮冷却由 `account.config` 持有、单一 sweeper 无并发半开；后台传输失败继续隔离（t090）不污染 `connectivity_state`，永久认证失败走凭据状态，单目录错误只影响该目录，共享端点其他账号不受牵连。探针与业务读解耦：`/ready` 全走 Core Connection（`AUTOCOMMIT`，无 ORM Session/ROLLBACK）且只缓存 worker 信号（短 TTL，DB/schema/LISTEN 每次读新值、断开立即失效），Worker 主循环刷新 tmpfs 存活戳供容器探针校验新鲜度（不冷启查库），三类 healthcheck interval 统一 30s；仅独立心跳等可丢弃状态允许异步提交，邮件/checkpoint/Outbox/同步请求结算及带远端副作用的业务事务保持同步提交。
+5. **单机运行时资源收敛、巡检探针边界与启动迁移锁释放**（t095, t096）：单机自托管默认以单进程嵌入式编排（`docker-compose.embedded.yml`，API + 内嵌 Worker，进程先迁移后启动），分布式双进程为可选 profile，两种形态互斥、共享数据卷；连接池、IDLE 配额、执行槽位（`total_slots`、`background_start_slot`）均由 `mail_core/runtime_budget.py` 单一来源派生（单机默认 4/4 池、8 IDLE 配额、8 执行槽位、2 前台保留起点），并为 API/后台/维护/LISTEN 直连预留。启动迁移 `run_migrations()` 在执行任何写转换或 Alembic 升级前先结束只读检查事务并销毁 `check_engine`，避免只读检查事务持有 `AccessShareLock` 与后续 DDL `AccessExclusiveLock` 自死锁。全夹巡检以账号级门禁统一：首个账号级传输/认证失败写账号级 patrol 冷却并短路本轮剩余目录（同轮被短路目录仅跳过，既不写入 `folder_patrol_status` 也不累加失败计数；冷却过期后恢复探测成功即清除过期 `patrol_cooldown_until`），跨轮冷却由 `account.config` 持有、单一 sweeper 无并发半开；后台传输失败继续隔离（t090）不污染 `connectivity_state`，永久认证失败走凭据状态，单目录错误只影响该目录，共享端点其他账号不受牵连。探针与业务读解耦：`/ready` 全走 Core Connection（`AUTOCOMMIT`，无 ORM Session/ROLLBACK）且只缓存 worker 信号（短 TTL，DB/schema/LISTEN 每次读新值、断开立即失效），Worker 主循环刷新存活戳（未显式配置 `MAIL_CORE_LIVENESS_STAMP` 且已设 `MAIL_CORE_DATA_DIR` 时默认置于数据目录 `worker-liveness.json` 供容器与侧车隔离探测），`/ready` 仅在显式配置戳路径或嵌入式 Worker 启用（`MAIL_CORE_EMBEDDED_WORKER != "0"`）时校验本地戳，分布式 API 不受宿主 `/tmp` 残留影响；三类 healthcheck interval 统一 30s；仅独立心跳等可丢弃状态允许异步提交，邮件/checkpoint/Outbox/同步请求结算及带远端副作用的业务事务保持同步提交。
 
 ______________________________________________________________________
 
@@ -121,7 +121,7 @@ ______________________________________________________________________
 1. **IDLE 唤醒通道**：
     - 每账号至多一条 IDLE 长连接、只 SELECT 收件箱、仅对已完成基线的文件夹建立；服务器未在 CAPABILITY 宣告 IDLE 时不发 IDLE，该账号保持轮询；
     - IDLE 收到变化通知后仅入队 `SYNC_FOLDER_DELTA`（既有去重键 `delta:{account_id}:{folder_id}`），不直接读写邮件数据、不绕基线门禁 / 租约 / fencing；每次会话成功建立（首连、断线重连、凭据或席位重建）后先入队一次同去重键的收件箱补偿 delta，覆盖无活动会话窗口内到达的邮件，已存在 pending / claimed 任务时合并；补偿入队失败按有界退避重试，预算耗尽则释放 IDLE 席位让 t057 轮询兜底并在下次重连继续补偿，不终止监听、不把账号标记 failed，不具备 IDLE 能力或永久认证失败的账号不补偿并保持轮询；连接在 28 分钟内主动 DONE 重入，断线按指数退避（基数与上限可配）加抖动重连；账号禁用、凭据变更（指纹变化）或收件箱失去同步资格（`selectable=False` 或 `remote_state!="active"`）时立即关闭对应会话；
-    - IDLE 长连接使用独立配额（默认 32），不占用 `connection_slots` 任务槽位；持有 IDLE 的账号跳过收件箱周期轮询，让位后恢复。配额席位只按邮件数据排序（2026-10-28 用户拍板，取代原检查点活动时间口径）：主序为账号收件箱内现存邮件的服务器到达时间最大值（IMAP INTERNALDATE，即 `Message.sort_time`，非发件人 Date 头）倒序；收件箱为空的账号整体排在所有非空账号之后，组内依次按其他文件夹邮件到达时间最大值倒序、账号 `created_at` 倒序、账号 id 升序定序。滞回只在同组内按可比到达键生效：挑战者须比最弱在位者新出滞回窗（默认 300 秒）才换人，无可比键时不换人（稳定序），跨组顶替不受滞回保护。
+    - IDLE 长连接使用独立配额（单机默认 8，由 `mail_core/runtime_budget.py` 统一派生），不占用 `connection_slots` 任务槽位；持有 IDLE 的账号跳过收件箱周期轮询，让位后恢复。配额席位只按邮件数据排序（2026-10-28 用户拍板，取代原检查点活动时间口径）：主序为账号收件箱内现存邮件的服务器到达时间最大值（IMAP INTERNALDATE，即 `Message.sort_time`，非发件人 Date 头）倒序；收件箱为空的账号整体排在所有非空账号之后，组内依次按其他文件夹邮件到达时间最大值倒序、账号 `created_at` 倒序、账号 id 升序定序。滞回只在同组内按可比到达键生效：挑战者须比最弱在位者新出滞回窗（默认 300 秒）才换人，无可比键时不换人（稳定序），跨组顶替不受滞回保护。
 2. **全文件夹 STATUS 巡检与状态隔离 (A14)**：
     - 覆盖全部非收件箱、可同步物理目录（`kind="container"`、`selectable=True`、`remote_state="active"`、`sync_enabled` 账号）；探测为短连接 STATUS（IMAP）或文件夹计数读取（Graph），不做全量 metadata 扫描；
     - 基线快照与巡检状态存入独立 `FolderPatrolStatus`（`folder_patrol_status` 表，含 `last_status` / `last_probe_at` / `last_probe_failures`），与 `SyncCheckpoint.cursor` 协议同步游标彻底解耦；随文件夹级联删除；

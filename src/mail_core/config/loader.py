@@ -90,8 +90,8 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
         db_max_overflow=_parse_int(source.get("MAIL_CORE_DB_MAX_OVERFLOW"), runtime_budget.DEFAULT_DB_MAX_OVERFLOW, "db_max_overflow"),
         db_pool_timeout=_parse_float(source.get("MAIL_CORE_DB_POOL_TIMEOUT"), 30.0, "db_pool_timeout"),
         db_pool_recycle=_parse_int(source.get("MAIL_CORE_DB_POOL_RECYCLE"), 1800, "db_pool_recycle"),
-        total_slots=_parse_int(source.get("MAIL_CORE_TOTAL_SLOTS"), 8, "total_slots"),
-        background_start_slot=_parse_int(source.get("MAIL_CORE_BACKGROUND_START_SLOT"), 2, "background_start_slot"),
+        total_slots=_parse_int(source.get("MAIL_CORE_TOTAL_SLOTS"), runtime_budget.DEFAULT_TOTAL_SLOTS, "total_slots"),
+        background_start_slot=_parse_int(source.get("MAIL_CORE_BACKGROUND_START_SLOT"), runtime_budget.DEFAULT_BACKGROUND_START_SLOT, "background_start_slot"),
         capacity_retry_seconds=_parse_float(
             source.get("MAIL_CORE_CAPACITY_RETRY_SECONDS"), 5.0, "capacity_retry_seconds"
         ),

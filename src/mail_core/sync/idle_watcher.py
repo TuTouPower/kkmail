@@ -41,6 +41,7 @@ from typing import Any, Callable
 
 from sqlalchemy import func, select
 
+from mail_core import runtime_budget
 from mail_core.mail.domain.enums import ExecutionOrigin, FolderRemoteState, JobType
 from mail_core.mail.storage.models import (
     Account,
@@ -75,7 +76,7 @@ _BLOCKED_RETRY_S = 3600.0
 @dataclass(frozen=True)
 class IdleWatcherConfig:
     enabled: bool = True
-    quota: int = 32
+    quota: int = runtime_budget.DEFAULT_IDLE_QUOTA
     max_duration_s: float = 1680.0
     backoff_base_s: float = 5.0
     backoff_max_s: float = 300.0

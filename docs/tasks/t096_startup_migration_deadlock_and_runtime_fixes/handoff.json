@@ -1,0 +1,17 @@
+{
+  "tid": "t096",
+  "attempt": 1,
+  "execution_id": "f720a17a97fa4b94b5e9e252672c86fe",
+  "status": "done",
+  "branch": "t096_startup_migration_deadlock_and_runtime_fixes",
+  "base_sha": "bac5baebef3a5c1d37c53e3f3f4cdd006f323582",
+  "spec_source_sha": "bac5baebef3a5c1d37c53e3f3f4cdd006f323582",
+  "tests": "单元测试 `KKMAIL_TEST_MODE=unit PYTHONPATH=src .venv/bin/python -m pytest tests/mail_core/test_t096_fixes_unit.py tests/mail_core/test_t095_contract_unit.py tests/mail_core/test_baseline_unit.py tests/mail_core/test_config.py tests/mail_core/test_a104_pool_kwargs.py tests/mail_core/test_a294_healthcheck_env.py -q --no-cov`（59 passed）；独立 0030 回归 `./scripts/run-mail-core-tests.sh run --no-cov -k \"test_t8_real_0030_legacy_shape_upgrades_via_startup\"`（1 passed in 2.82s）；100% 后端 PostgreSQL 套件 `./scripts/run-mail-core-tests.sh run`（0 排除，2335 passed, 2 skipped in 2124.59s，总覆盖率 87%）；快速门禁 `test_cmd`（`.repo_template` contract 389 passed/1 skipped、前端 vitest/`openapi:check`/`css:check`/`tsc -b`/`build`、桌面端 `npm test`、`check_doc_sensitive.py` 0 违规）、`export_openapi.py --check`（46 paths 一致）、`check_dep_locks.py --check` 与双 Compose 配置校验均通过",
+  "blackbox": "`npm --prefix src/frontend run test:e2e`（Playwright 26 passed in 36.3s）",
+  "review": "`review_code.md` Round 1 `PASS`（0 finding，`reviewed_scope: 0d2fd3431fd48ccf`）；`review_test.md` Round 1 `PASS`（0 critical/important，3 minor 均已登记 `p105` 处置，`reviewed_scope: 0d2fd3431fd48ccf`）",
+  "review_scope": "0d2fd3431fd48ccf",
+  "pending": [
+    "p105"
+  ],
+  "findings": []
+}
