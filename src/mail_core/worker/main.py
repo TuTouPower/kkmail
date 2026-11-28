@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import signal
+import sys
 import threading
 import time
 import uuid
@@ -24,6 +25,7 @@ _stop = False
 _stop_event = threading.Event()
 _wake_event = threading.Event()
 CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
+LIVENESS_WARN_INTERVAL_S = 60.0
 
 
 @dataclass
@@ -567,6 +569,84 @@ def next_poll_delay(
     return min(max_idle, max(base, previous * 2 if previous else base))
 
 
+def _resolve_watchdog_timeout_s(*, poll_interval_s: float, max_idle_s: float) -> float | None:
+    """Resolve main-loop stall watchdog timeout; <= 0 disables it."""
+    raw_lag = os.environ.get("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG")
+    healthcheck_max_lag = 60.0
+    if raw_lag is not None and raw_lag.strip():
+        try:
+            parsed_lag = float(raw_lag)
+            if math.isfinite(parsed_lag) and parsed_lag > 0:
+                healthcheck_max_lag = parsed_lag
+        except ValueError:
+            pass
+    default_timeout = max(
+        180.0,
+        healthcheck_max_lag * 3.0,
+        max(poll_interval_s, max_idle_s) * 4.0,
+    )
+    raw = os.environ.get("MAIL_CORE_WORKER_WATCHDOG_TIMEOUT")
+    if raw is None or not raw.strip():
+        return default_timeout
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning(
+            "invalid numeric environment setting MAIL_CORE_WORKER_WATCHDOG_TIMEOUT=%r; using default %s",
+            raw,
+            default_timeout,
+        )
+        return default_timeout
+    if not math.isfinite(value):
+        log.warning(
+            "invalid numeric environment setting MAIL_CORE_WORKER_WATCHDOG_TIMEOUT=%r; using default %s",
+            raw,
+            default_timeout,
+        )
+        return default_timeout
+    if value <= 0:
+        return None
+    return value
+
+
+def _exit_on_watchdog_stall(_elapsed_s: float) -> None:
+    """Terminate a stalled worker process so restart: unless-stopped recovers it."""
+    for handler in logging.getLogger().handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(1)
+
+
+def _write_liveness_stamp_with_warning(
+    *,
+    progress: int,
+    worker_id: str,
+    now: float,
+    last_warn_at: float | None,
+    warn_interval_s: float = LIVENESS_WARN_INTERVAL_S,
+) -> float | None:
+    """Refresh liveness stamp and log a rate-limited warning on filesystem failures."""
+    try:
+        from mail_core.liveness import write_liveness_stamp
+
+        write_liveness_stamp(progress=progress, worker_id=worker_id)
+        return last_warn_at
+    except Exception as exc:
+        if last_warn_at is None or (now - last_warn_at) >= warn_interval_s:
+            from mail_core.security.redact import safe_error
+
+            log.warning("worker liveness stamp write failed: %s", safe_error(exc))
+            return now
+        return last_warn_at
+
+
 def run(poll_interval_s: float | None = None, schedule_interval_s: float | None = None) -> None:
     global _stop
     _stop = False
@@ -599,6 +679,7 @@ def run(poll_interval_s: float | None = None, schedule_interval_s: float | None 
     sleep_s = interval
     last_reclaim_at: float | None = None
     last_schedule_at: float | None = None
+    last_liveness_warn_at: float | None = None
     schedule_thread: threading.Thread | None = None
     loop_progress = 0
 
@@ -606,7 +687,17 @@ def run(poll_interval_s: float | None = None, schedule_interval_s: float | None 
     from mail_core.worker.heartbeat import WorkerHeartbeatLoop
 
     Session = get_session_factory()
-    heartbeat_loop = WorkerHeartbeatLoop(worker_id, Session, interval_s=heartbeat_interval)
+    watchdog_timeout_s = _resolve_watchdog_timeout_s(
+        poll_interval_s=interval,
+        max_idle_s=max_idle,
+    )
+    heartbeat_loop = WorkerHeartbeatLoop(
+        worker_id,
+        Session,
+        interval_s=heartbeat_interval,
+        watchdog_timeout_s=watchdog_timeout_s,
+        on_watchdog_stall=_exit_on_watchdog_stall if watchdog_timeout_s is not None else None,
+    )
     heartbeat_loop.start()
 
     claim_heartbeat = UnifiedClaimHeartbeatLoop(Session, worker_id)
@@ -642,12 +733,15 @@ def run(poll_interval_s: float | None = None, schedule_interval_s: float | None 
             # a probe can verify the main loop is alive AND progressing without
             # a DB query or cold interpreter start.
             loop_progress += 1
-            try:
-                from mail_core.liveness import write_liveness_stamp
-
-                write_liveness_stamp(progress=loop_progress, worker_id=worker_id)
-            except Exception:
-                pass  # liveness is best-effort; DB heartbeats remain authoritative
+            mark_progress = getattr(heartbeat_loop, "mark_progress", None)
+            if callable(mark_progress):
+                mark_progress()
+            last_liveness_warn_at = _write_liveness_stamp_with_warning(
+                progress=loop_progress,
+                worker_id=worker_id,
+                now=now,
+                last_warn_at=last_liveness_warn_at,
+            )
             if last_reclaim_at is None or now - last_reclaim_at >= reclaim_interval:
                 last_reclaim_at = now
                 try:
