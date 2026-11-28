@@ -1,0 +1,17 @@
+{
+  "tid": "t099",
+  "attempt": 1,
+  "execution_id": "458077c5295248b2bd8ac739ffbc0943",
+  "status": "done",
+  "branch": "t099_unified_migration_executor",
+  "base_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "spec_source_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "tests": "真实 PostgreSQL 16.6（自备便携实例）——新增 t099 套件 7 条全过；回归 test_startup_migrations 13 条、test_migration_validation、test_legacy_migration、tests/scripts 离线套件 35 条、test_t096 AC-001 两条全过；unit 全量 2041 passed / 1 failed（失败为基线同环境亦失败的既存顺序污染，与本 task 无关）/ 84 skipped；check_doc_sensitive 0 违规、check_dep_locks 通过。官方 harness 后端全量 PG 套件因云端无 Docker 未执行，见 p109。",
+  "blackbox": "不适用（本 task 为迁移执行器内部统一，无 UI/外部行为面；入口行为由 PG 集成测试覆盖）",
+  "review": "Round 1 review_code PASS、review_test PASS，4 条 minor 全部已修（见 Review 处置）",
+  "review_scope": "53a4393166336e35",
+  "pending": [
+    "p109"
+  ],
+  "findings": []
+}

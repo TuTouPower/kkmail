@@ -38,98 +38,34 @@ def _configure_proxy_headers(*, enabled: bool, forwarded_allow_ips: str | None) 
 
 
 def run_migrations(*, check_only: bool = False) -> None:
-    import sqlalchemy
+    """Startup migration entry: a thin adapter over the shared executor.
 
+    All check / connection-release / write orchestration lives in
+    ``mail_core.db.baseline.execute_migration`` — the same executor the
+    offline tool uses — so startup, ``--migrate-only`` and
+    ``--check-migrations`` cannot diverge from it. This entry only resolves
+    the database URL (the Alembic tree location and revision context come
+    from the single source in baseline, which resolves via the
+    ``mail_core.db`` package, so it works from source and from a PyInstaller
+    bundle) and selects the startup policy and mode. The executor closes the
+    read-only check transaction and disposes its engine before opening any
+    DDL/DML migration connection, so inspection locks (e.g. AccessShareLock
+    on sync_checkpoints) never collide with ALTER TABLE.
+    """
     from mail_core.db import baseline
     from mail_core.db.session import database_url
 
-    from alembic import command
-
-    # Tree location and the revision context come from the single source in
-    # baseline (resolves via the mail_core.db package, so it works from
-    # source and from a PyInstaller bundle), shared with the offline tool.
     cfg = baseline.alembic_config()
-    context = baseline.revision_context(cfg)
-
     db_url = cfg.get_main_option("sqlalchemy.url") or database_url()
-    check_engine = sqlalchemy.create_engine(baseline.check_connect_url(db_url))
-    try:
-        with check_engine.connect() as conn:
-            backend = baseline.make_url(db_url).get_backend_name()
-            baseline.configure_read_only(conn, backend)
-            state = baseline.read_database_state(conn)
-            plan = baseline.plan_migration(state, context=context)
-
-            if plan.action in (
-                baseline.MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
-                baseline.MigrationAction.UNKNOWN_REVISION,
-                baseline.MigrationAction.NEWER_THAN_CODE,
-                baseline.MigrationAction.LEGACY_UNSUPPORTED,
-                baseline.MigrationAction.MULTIPLE_VERSIONS,
-            ):
-                raise RuntimeError(plan.message)
-
-            if plan.action in (
-                baseline.MigrationAction.AT_BASELINE,
-                baseline.MigrationAction.LEGACY,
-            ):
-                # Verification is dispatched by the shared verify_for_plan, so
-                # check_only and normal startup apply the same standard as the
-                # offline tool (A14): an AT_BASELINE database whose schema has
-                # drifted is refused here instead of being upgraded blindly.
-                errors = baseline.verify_for_plan(conn, plan)
-                if errors:
-                    detail = "\n  - ".join(errors)
-                    if plan.action == baseline.MigrationAction.AT_BASELINE:
-                        raise RuntimeError(
-                            "Database schema verification failed for unified baseline:\n  - "
-                            + detail
-                            + "\nThe database was not modified."
-                        )
-                    raise RuntimeError(
-                        f"Automatic upgrade of this legacy database (revision '{plan.current_revision}') "
-                        "to the unified baseline is not supported: the narrow conversion "
-                        "path only handles the verified legacy shape.\n  - " + detail + "\n"
-                        "The database was not modified. Restore the pre-upgrade sealed "
-                        "backup into a deployment running the matching historical release "
-                        "and resolve the schema there; do not re-run this migration "
-                        "against the same database, it cannot reconstruct the missing schema."
-                    )
-    finally:
-        # Close the read-only check transaction and pool before opening any
-        # DDL/DML migration connection so inspection locks (e.g.
-        # AccessShareLock on sync_checkpoints) never collide with ALTER TABLE.
-        check_engine.dispose()
-
-    if check_only:
-        return
-
-    if plan.action == baseline.MigrationAction.EMPTY_DATABASE:
-        command.upgrade(cfg, "head")
-        return
-
-    # A database still stamped at an earlier known revision is upgraded
-    # in place (the new Alembic revision carries the schema change and
-    # forward data mapping); pre-upgrade schema verification is skipped
-    # because the old schema is expected to differ.
-    if plan.action == baseline.MigrationAction.UPGRADE_TO_HEAD:
-        baseline.upgrade_head_and_verify(db_url)
-        return
-
-    if plan.action == baseline.MigrationAction.AT_BASELINE:
-        command.upgrade(cfg, "head")
-        return
-
-    try:
-        outcome = baseline.apply_narrow_legacy_conversion(db_url)
-    except baseline.SchemaValidationError as exc:
-        raise RuntimeError(
-            f"Legacy conversion for revision '{plan.current_revision}' failed and was "
-            f"rolled back: {exc} The database was not modified."
-        ) from exc
-    log.info("Narrow legacy conversion %s for revision '%s'", outcome, plan.current_revision)
-    baseline.upgrade_head_and_verify(db_url)
-    return
+    baseline.execute_migration(
+        db_url,
+        mode=(
+            baseline.MigrationMode.CHECK_ONLY
+            if check_only
+            else baseline.MigrationMode.WRITE
+        ),
+        policy=baseline.STARTUP_POLICY,
+    )
 
 
 def _sidecar_address_family(host: str) -> int:

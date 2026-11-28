@@ -71,19 +71,28 @@ def test_offline_revision_context_is_gone():
     assert not hasattr(baseline, "offline_revision_context")
 
 
-def test_startup_entry_reads_state_via_baseline_helper():
-    """A2: the startup entry must not hand-copy database-state reading.
+def test_startup_entry_delegates_to_shared_executor():
+    """t099: the startup entry must not hand-copy migration orchestration.
 
-    ``run_migrations`` delegates to ``baseline.read_database_state`` (the same
-    reader the offline entry uses), so any future extension of the reader
-    reaches both entries.
+    ``run_migrations`` is a thin adapter over ``baseline.execute_migration``
+    (the single executor the offline entry also uses, which owns state
+    reading via ``baseline.read_database_state``), so check, connection
+    release and write dispatch cannot diverge between entries.
+
+    Retires ``test_startup_entry_reads_state_via_baseline_helper`` (A2): its
+    source assertion pinned ``run_migrations``' own call to
+    ``baseline.read_database_state(conn)``; the unified executor moved that
+    call into ``baseline.execute_migration``, so the old shape no longer
+    exists to assert. The A2 invariant (no hand-copied state reading in the
+    startup entry) is preserved in the stronger form asserted here.
     """
     import inspect as py_inspect
 
     from mail_core import __main__ as main_module
 
     src = py_inspect.getsource(main_module.run_migrations)
-    assert "baseline.read_database_state(conn)" in src
+    assert "baseline.execute_migration" in src
+    assert "create_engine" not in src
     assert "SELECT version_num FROM alembic_version" not in src
 
 
@@ -249,6 +258,183 @@ def test_verify_for_plan_dispatches_by_action(monkeypatch):
     assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.EMPTY_DATABASE)) == []
     assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.UNKNOWN_REVISION)) == []
     assert calls == ["full", "narrow"]
+
+
+class _ExecutorRig:
+    """Wire ``execute_migration`` to in-memory collaborators (no database).
+
+    The check connection is a sentinel: the rig records the order in which
+    the read-only context exits and the write collaborators are entered, so
+    tests can assert the release-before-write invariant structurally.
+    """
+
+    def __init__(self, monkeypatch, state: baseline.DatabaseState):
+        from contextlib import contextmanager
+
+        self.events: list[str] = []
+        self.upgrades: list[str] = []
+        self.upgrade_and_verify: list[str] = []
+        self.conversions: list[str] = []
+        events = self.events
+
+        @contextmanager
+        def fake_read_only(url):
+            events.append("check_open")
+            try:
+                yield object()
+            finally:
+                events.append("check_closed")
+
+        monkeypatch.setattr(baseline, "read_only_connection", fake_read_only)
+        monkeypatch.setattr(
+            baseline, "read_database_state", lambda conn: state
+        )
+        monkeypatch.setattr(baseline, "verify_for_plan", lambda conn, plan: [])
+        monkeypatch.setattr(
+            "alembic.command.upgrade",
+            lambda cfg, rev: (events.append("upgrade"), self.upgrades.append(rev)),
+        )
+        monkeypatch.setattr(
+            baseline,
+            "upgrade_head_and_verify",
+            lambda url: (
+                events.append("upgrade_head_and_verify"),
+                self.upgrade_and_verify.append(url),
+            ),
+        )
+        monkeypatch.setattr(
+            baseline,
+            "apply_narrow_legacy_conversion",
+            lambda url: (events.append("conversion"), self.conversions.append(url), "converted")[2],
+        )
+
+
+def _state(*version_rows: str, tables: frozenset[str] = frozenset()) -> baseline.DatabaseState:
+    return baseline.DatabaseState(version_rows=tuple(version_rows), table_names=tables)
+
+
+def test_executor_empty_database_write_dispatch_depends_on_policy(monkeypatch):
+    """t099: startup initializes an empty database; the offline entry refuses it."""
+    rig = _ExecutorRig(monkeypatch, _state())
+    plan = baseline.execute_migration(
+        "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.STARTUP_POLICY
+    )
+    assert plan.action is baseline.MigrationAction.EMPTY_DATABASE
+    assert rig.upgrades == ["head"]
+    assert rig.events == ["check_open", "check_closed", "upgrade"]
+
+    rig = _ExecutorRig(monkeypatch, _state())
+    with pytest.raises(baseline.SchemaValidationError, match="empty"):
+        baseline.execute_migration(
+            "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.OFFLINE_POLICY
+        )
+    assert rig.upgrades == []
+
+
+def test_executor_check_modes_never_dispatch_writes(monkeypatch):
+    """t099: CHECK_ONLY / DRY_RUN stop after the check phase for every plan."""
+    rig = _ExecutorRig(monkeypatch, _state("20261031_0030"))
+    plan = baseline.execute_migration(
+        "postgresql://x", mode=baseline.MigrationMode.CHECK_ONLY, policy=baseline.STARTUP_POLICY
+    )
+    assert plan.action is baseline.MigrationAction.LEGACY
+    assert rig.events == ["check_open", "check_closed"]
+    assert rig.conversions == [] and rig.upgrades == [] and rig.upgrade_and_verify == []
+
+
+def test_executor_refusal_actions_raise_plan_message(monkeypatch):
+    rig = _ExecutorRig(monkeypatch, _state("unknown_rev_9999"))
+    with pytest.raises(baseline.SchemaValidationError, match="unrecognized"):
+        baseline.execute_migration(
+            "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.STARTUP_POLICY
+        )
+    assert rig.events == ["check_open", "check_closed"]
+
+
+def test_executor_legacy_verification_error_wording_is_per_entry(monkeypatch):
+    """t099: a failed narrow-conversion precondition check keeps each
+    entry's operator wording, produced by the entry's policy."""
+    rig = _ExecutorRig(monkeypatch, _state("20261031_0030"))
+    monkeypatch.setattr(baseline, "verify_for_plan", lambda conn, plan: ["some drift"])
+    with pytest.raises(
+        baseline.SchemaValidationError, match="narrow conversion"
+    ) as startup_exc:
+        baseline.execute_migration(
+            "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.STARTUP_POLICY
+        )
+    assert "matching historical release" in str(startup_exc.value)
+
+    with pytest.raises(
+        baseline.SchemaValidationError, match="offline tool cannot reconstruct"
+    ):
+        baseline.execute_migration(
+            "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.OFFLINE_POLICY
+        )
+    assert rig.conversions == []
+
+
+def test_executor_legacy_conversion_error_wrapping_is_per_entry(monkeypatch):
+    """t099: startup wraps a conversion SchemaValidationError as a rolled-back
+    RuntimeError; the offline entry propagates it unchanged."""
+    rig = _ExecutorRig(monkeypatch, _state("20261031_0030"))
+
+    def _fail(url):
+        raise baseline.SchemaValidationError("conversion precondition lost")
+
+    monkeypatch.setattr(baseline, "apply_narrow_legacy_conversion", _fail)
+    with pytest.raises(RuntimeError, match="rolled back") as startup_exc:
+        baseline.execute_migration(
+            "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.STARTUP_POLICY
+        )
+    assert isinstance(startup_exc.value.__cause__, baseline.SchemaValidationError)
+
+    with pytest.raises(baseline.SchemaValidationError, match="precondition lost"):
+        baseline.execute_migration(
+            "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.OFFLINE_POLICY
+        )
+    assert rig.upgrade_and_verify == []
+
+
+def test_executor_write_dispatch_by_action(monkeypatch):
+    """t099: AT_BASELINE replays the chain for startup and re-stamps for the
+    offline entry; UPGRADE_TO_HEAD and LEGACY go through
+    upgrade_head_and_verify (LEGACY after the narrow conversion), always
+    after the check connection closed."""
+    rig = _ExecutorRig(monkeypatch, _state(baseline.CURRENT_HEAD_REVISION))
+    baseline.execute_migration(
+        "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.STARTUP_POLICY
+    )
+    assert rig.upgrades == ["head"]
+    assert rig.upgrade_and_verify == []
+
+    stamps: list[str] = []
+    rig = _ExecutorRig(monkeypatch, _state(baseline.CURRENT_HEAD_REVISION))
+    monkeypatch.setattr(baseline, "_stamp_at_baseline", lambda url: stamps.append(url))
+    baseline.execute_migration(
+        "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.OFFLINE_POLICY
+    )
+    assert rig.upgrades == []
+    assert stamps == ["postgresql://x"]
+
+    rig = _ExecutorRig(monkeypatch, _state(UNIFIED_BASELINE_REVISION))
+    baseline.execute_migration(
+        "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.OFFLINE_POLICY
+    )
+    assert rig.upgrades == []
+    assert rig.upgrade_and_verify == ["postgresql://x"]
+
+    rig = _ExecutorRig(monkeypatch, _state("20261031_0030"))
+    baseline.execute_migration(
+        "postgresql://x", mode=baseline.MigrationMode.WRITE, policy=baseline.OFFLINE_POLICY
+    )
+    assert rig.conversions == ["postgresql://x"]
+    assert rig.upgrade_and_verify == ["postgresql://x"]
+    assert rig.events == [
+        "check_open",
+        "check_closed",
+        "conversion",
+        "upgrade_head_and_verify",
+    ]
 
 
 def test_testing_doc_baseline_gate_describes_a16_full_comparison():
