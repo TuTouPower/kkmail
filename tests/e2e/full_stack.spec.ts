@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
+import { chooseDropdownOption } from './dropdown'
 
 const E2E_PASSWORD = process.env.E2E_PASSWORD || 'E2E_Test_Pass_123!'
 const IMAP_HOST = process.env.MAIL_CORE_IMAP_HOST || '127.0.0.1'
@@ -444,8 +445,8 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     await expect(page.getByRole('button', { name: '所有收件箱', exact: true })).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: '设置' }).click()
     const accountSelect = page.getByLabel(`移动 ${email}`)
-    const accountRow = accountSelect.locator('xpath=..')
-    const accountDetails = accountRow.locator('div').first()
+    const accountRow = page.locator('.settings-account-row').filter({ has: accountSelect })
+    const accountDetails = accountRow.locator('.settings-account-identity')
     await expect(accountSelect).toHaveAttribute('data-select-value', firstGroupId)
 
     const moveResponse = page.waitForResponse((response) =>
