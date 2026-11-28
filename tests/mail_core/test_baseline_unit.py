@@ -171,7 +171,7 @@ def test_is_legacy_revision_is_set_membership_only():
 
 def test_required_tables_match_orm_metadata():
     """A16: REQUIRED_TABLES (planner business-table detection) and the ORM
-    metadata (schema truth) must name the same 32 tables."""
+    metadata (schema truth) must name the same 33 tables."""
     assert baseline.REQUIRED_TABLES == frozenset(baseline._baseline_metadata().tables)
 
 

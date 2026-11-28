@@ -17,7 +17,12 @@ from sqlalchemy.pool import NullPool
 from mail_core import __main__ as main_module
 from mail_core.db import baseline
 from mail_core.mail.domain.enums import FolderRemoteState
-from mail_core.mail.storage.models import Account, Folder, FolderPatrolStatus
+from mail_core.mail.storage.models import (
+    Account,
+    AccountPatrolState,
+    Folder,
+    FolderPatrolStatus,
+)
 from mail_core.providers.base import FolderStatus
 from mail_core.sync.patrol import (
     PATROL_COOLDOWN_S,
@@ -210,7 +215,9 @@ def test_ac003_patrol_short_circuit_zero_patrol_writes_and_clears_cooldown_on_re
         )
         assert len(fps_rows) == 1
         acc_obj = session.get(Account, acc_id)
-        assert "patrol_cooldown_until" in (acc_obj.config or {})
+        # t097: the cooldown is patrol state, never a config key.
+        assert "patrol_cooldown_until" not in (acc_obj.config or {})
+        assert session.get(AccountPatrolState, acc_id) is not None
 
     # After cooldown expires, recovery probe succeeds and clears the stale cooldown key.
     healthy = _Provider(fail=False)
@@ -226,6 +233,8 @@ def test_ac003_patrol_short_circuit_zero_patrol_writes_and_clears_cooldown_on_re
         assert res2.failed == 0
         acc_obj = session.get(Account, acc_id)
         assert "patrol_cooldown_until" not in (acc_obj.config or {})
+        # t097: the lease holder's recovery success cleared the patrol state.
+        assert session.get(AccountPatrolState, acc_id) is None
 
 
 def test_ac005_isolated_runtime_does_not_touch_shared_tmp_liveness(tmp_path):

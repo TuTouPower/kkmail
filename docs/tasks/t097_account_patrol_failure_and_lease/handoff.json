@@ -1,0 +1,18 @@
+{
+  "tid": "t097",
+  "attempt": 1,
+  "execution_id": "9799005d82e64704bf906470dcc638c8",
+  "status": "done",
+  "branch": "t097_account_patrol_failure_and_lease",
+  "base_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "spec_source_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "tests": "t097 新增 12 个真实 PG 测试全过（便携 PostgreSQL 16.6，SHA-256 与仓库 pin 一致，scratch 隔离 conftest）；t095 patrol 子集 15 passed；全量 unit 1534 passed / 3 failed / 615 skipped（3 条失败与未改动基线逐条一致）；模板契约与基线一致；文档敏感扫描通过",
+  "blackbox": "随正式 PG 门禁归 p108 补跑",
+  "review": "3 轮；Round 1 双 FAIL 的 2 条 important 已先红后绿修复，Round 2 双 PASS（coverage 5/5），Round 3 聚焦 PASS；无未解决 critical/important；minor 遗留 p111",
+  "review_scope": "7a814f512aba3e09",
+  "pending": [
+    "p108",
+    "p111"
+  ],
+  "findings": []
+}

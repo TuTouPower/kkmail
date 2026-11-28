@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from mail_core.mail.domain.enums import FolderRemoteState
 from mail_core.mail.domain.failures import StructuredFailure
-from mail_core.mail.storage.models import Account, Folder
+from mail_core.mail.storage.models import Account, AccountPatrolState, Folder
 from mail_core.sync.patrol import PatrolConfig, schedule_folder_status_patrol
 
 pytestmark = pytest.mark.skipif(
@@ -86,11 +86,13 @@ def test_ac004_transport_failure_short_circuits_remaining_folders():
         assert len(provider.probed) == 1
         assert result.failed >= 1
 
-    # Cross-round cooldown is held in account.config, not connectivity_state.
+    # Cross-round cooldown is held in account_patrol_state (t097),
+    # not in connectivity_state and not in account.config.
     with Session() as session:
         acc = session.get(Account, acc_id)
         assert acc.connectivity_state == "connected"  # t090 isolation preserved
-        assert "patrol_cooldown_until" in (acc.config or {})
+        assert "patrol_cooldown_until" not in (acc.config or {})
+        assert session.get(AccountPatrolState, acc_id) is not None
 
 
 def test_ac006_committed_business_state_survives_restart_and_heartbeat_rebuild():

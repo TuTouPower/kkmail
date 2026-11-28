@@ -72,6 +72,7 @@ EXPECTED_CORE_TABLES: frozenset[str] = frozenset({
     "accounts",
     "account_sync_leases",
     "account_sync_activity",
+    "account_patrol_state",
     "folders",
     "threads",
     "messages",
@@ -272,13 +273,13 @@ def _read_versions(db_url: str) -> list[str]:
         engine.dispose()
 
 
-def test_required_tables_matches_expected_core_32_tables():
-    """Verify REQUIRED_TABLES against the hardcoded specification of 32 core tables.
+def test_required_tables_matches_expected_core_33_tables():
+    """Verify REQUIRED_TABLES against the hardcoded specification of 33 core tables.
 
     Prevents self-referential / circular testing where tests pass trivially
     by simply importing whatever REQUIRED_TABLES happens to contain.
     """
-    assert len(EXPECTED_CORE_TABLES) == 32
+    assert len(EXPECTED_CORE_TABLES) == 33
     assert REQUIRED_TABLES == EXPECTED_CORE_TABLES
 
 

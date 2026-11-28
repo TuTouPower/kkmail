@@ -391,6 +391,40 @@ class FolderPatrolStatus(Base):
     )
 
 
+class AccountPatrolState(Base):
+    """Account-level patrol runtime state: cooldown + half-open lease (t097).
+
+    Deliberately separate from ``Account.config`` (user-edited settings) and
+    from the health columns on ``accounts``: the patrol cooldown and the
+    half-open probe lease are runtime facts owned by the patrol alone. The
+    lease carries a unique token so settlement is fenced — a result arriving
+    after the lease expired and was re-claimed cannot clear or overwrite the
+    current holder's state.
+    """
+
+    __tablename__ = "account_patrol_state"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AccountSyncLease(Base):
     """Account-level sync lease + fencing token (architecture §7.5)."""
 

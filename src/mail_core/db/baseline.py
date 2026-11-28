@@ -45,7 +45,7 @@ LOG = logging.getLogger("migrate_to_unified_baseline")
 UNIFIED_BASELINE_REVISION = "20261107_0001"
 # The current Alembic head.  A database still stamped at the unified baseline
 # must be upgraded to this head before its schema matches the ORM.
-CURRENT_HEAD_REVISION = "20261128_0008"
+CURRENT_HEAD_REVISION = "20261129_0009"
 
 CORE_CRITICAL_TABLES: frozenset[str] = frozenset({
     "accounts",
@@ -140,6 +140,7 @@ REQUIRED_TABLES: frozenset[str] = frozenset({
     "accounts",
     "account_sync_leases",
     "account_sync_activity",
+    "account_patrol_state",
     "folders",
     "threads",
     "messages",
@@ -411,7 +412,7 @@ def verify_baseline_schema(bind: Engine | Connection) -> list[str]:
     of truth for the baseline schema — with Alembic's ``compare_metadata``:
     table set, column names, PostgreSQL-exact column types, nullability,
     primary keys, foreign keys, unique constraints and indexes across all
-    32 tables. Returns human-readable differences; empty means the schema
+    33 tables. Returns human-readable differences; empty means the schema
     is exactly the baseline.
 
     Deliberate comparison settings (the complete list of exclusions, each
@@ -532,9 +533,11 @@ def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
     match the ORM the comparison is made against. What remains here is only
     what the conversion itself relies on:
 
-    - every baseline table other than ``folder_patrol_status`` already
-      exists (the conversion creates only that one table, so anything else
-      missing can never be repaired by converting);
+    - every baseline table other than ``folder_patrol_status`` and
+      ``account_patrol_state`` already exists (the conversion creates only
+      ``folder_patrol_status``, and ``account_patrol_state`` is created by
+      the later Alembic migration ``20261129_0009`` on the way to head, so
+      anything else missing can never be repaired by converting);
     - ``sync_checkpoints`` has the composite primary key, the CASCADE
       foreign keys and a JSON cursor column the patrol migration reads and
       rewrites, and every cursor row is a readable JSON object;
@@ -552,7 +555,10 @@ def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
 
     errors: list[str] = []
 
-    missing_tables = sorted((REQUIRED_TABLES - {"folder_patrol_status"}) - existing)
+    missing_tables = sorted(
+        (REQUIRED_TABLES - {"folder_patrol_status", "account_patrol_state"})
+        - existing
+    )
     if missing_tables:
         errors.append(f"Missing required tables: {', '.join(missing_tables)}")
 
