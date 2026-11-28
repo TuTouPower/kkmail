@@ -908,8 +908,17 @@ def test_ac005_production_orm_queries_use_partial_indexes_under_force_generic_pl
         pass
 
     with Session() as session:
-        acc, _folder = _seed_account_with_inbox(session, prefix="gplan")
+        acc, folder = _seed_account_with_inbox(session, prefix="gplan")
         acc_id = acc.id
+        session.add(
+            SyncCheckpoint(
+                account_id=acc.id,
+                folder_id=folder.id,
+                full_scan_complete=True,
+                last_delta_settled_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            )
+        )
+        session.flush()
         session.execute(
             text(
                 """
@@ -968,6 +977,8 @@ def test_ac005_production_orm_queries_use_partial_indexes_under_force_generic_pl
         current_label = {"name": ""}
 
         def _capture(orm_state):
+            if current_label["name"] == "inbox_dedupe" and "worker_jobs" not in str(orm_state.statement):
+                return
             captured[current_label["name"]] = orm_state.statement
             raise _Captured
 
@@ -986,6 +997,7 @@ def test_ac005_production_orm_queries_use_partial_indexes_under_force_generic_pl
                 ),
                 ("find_active", lambda: find_active_job(session, "gplan:20020")),
                 ("inflight_sync", lambda: _inflight_full_root_generation(session, acc_id)),
+                ("inbox_dedupe", lambda: schedule_periodic_inbox_sync(session, idle_held_account_ids=set())),
             ]
             for label, fn in operations:
                 current_label["name"] = label
@@ -996,7 +1008,7 @@ def test_ac005_production_orm_queries_use_partial_indexes_under_force_generic_pl
         finally:
             event.remove(session, "do_orm_execute", _capture)
 
-        assert set(captured) == {"prune", "enqueue_dedupe", "find_active", "inflight_sync"}
+        assert set(captured) == {"prune", "enqueue_dedupe", "find_active", "inflight_sync", "inbox_dedupe"}
 
         conn = session.connection()
         conn.exec_driver_sql("SET LOCAL plan_cache_mode = 'force_generic_plan'")
@@ -1022,7 +1034,7 @@ def test_ac005_production_orm_queries_use_partial_indexes_under_force_generic_pl
         assert "Sort" not in plans["prune"], plans["prune"]
         assert "Seq Scan" not in plans["prune"], plans["prune"]
 
-        for active_label in ("enqueue_dedupe", "find_active", "inflight_sync"):
+        for active_label in ("enqueue_dedupe", "find_active", "inflight_sync", "inbox_dedupe"):
             assert "ix_worker_jobs_dedupe_active" in plans[active_label], plans[active_label]
             assert "ix_worker_jobs_claim" not in plans[active_label], plans[active_label]
             assert "Seq Scan" not in plans[active_label], plans[active_label]

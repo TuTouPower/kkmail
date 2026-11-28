@@ -652,3 +652,52 @@ def test_pg_rollback_does_not_consume_cooldown_or_update_reltuples(monkeypatch):
         assert reltuples_within_tolerance(reltuples, real_count), (
             f"{table} reltuples={reltuples} out of tolerance for count={real_count}"
         )
+
+
+def test_unit_delta_and_worker_sweep_share_retention_stats_tracker(monkeypatch):
+    """Cross-module check: delta.py delegates without duplicate timer and worker sweep flushes deferred ANALYZE."""
+    from mail_core.sync import delta as delta_mod
+    from mail_core.worker import main as worker_mod
+
+    clock = [30_000.0]
+    monkeypatch.setattr(retention_mod.time, "monotonic", lambda: clock[0])
+    analyze_calls: list[int] = []
+    monkeypatch.setattr(
+        retention_mod,
+        "_run_message_tables_analyze",
+        lambda _s: analyze_calls.append(1) or True,
+    )
+
+    assert not hasattr(delta_mod, "_last_message_stats_refresh")
+    assert not hasattr(delta_mod, "_message_stats_lock")
+
+    eng, make_session = _sqlite_session_factory()
+    try:
+        # 1. Initial bulk delta consumes 300s cooldown once committed.
+        with make_session() as s:
+            delta_mod._refresh_message_stats_if_bulk(s, 1000)
+            s.commit()
+        assert len(analyze_calls) == 1
+
+        # 2. Second burst inside 300s cooldown accumulates deferred rows instead of dropping.
+        clock[0] = 30_100.0
+        with make_session() as s:
+            delta_mod._refresh_message_stats_if_bulk(s, 1200)
+            s.commit()
+        assert len(analyze_calls) == 1
+        assert pending_message_stats_rows() == 1200
+
+        # 3. Periodic worker sweep triggers deferred ANALYZE once 300s cooldown elapses.
+        clock[0] = 30_301.0
+        monkeypatch.setattr(worker_mod, "schedule_periodic_inbox_sync", lambda *_a, **_kw: 0)
+        import mail_core.sync.patrol as patrol_mod
+        monkeypatch.setattr(patrol_mod, "schedule_folder_status_patrol", lambda *_a, **_kw: patrol_mod.PatrolResult())
+        monkeypatch.setattr(worker_mod, "recheck_unreachable_with_probe", lambda *_a, **_kw: 0)
+        import mail_core.db.session as db_session_mod
+        monkeypatch.setattr(db_session_mod, "get_session_factory", lambda: make_session)
+
+        worker_mod._schedule_periodic_sync_once()
+        assert len(analyze_calls) == 2
+        assert pending_message_stats_rows() == 0
+    finally:
+        eng.dispose()

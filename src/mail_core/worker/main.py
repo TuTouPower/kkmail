@@ -212,7 +212,7 @@ def schedule_periodic_inbox_sync(
     from sqlalchemy import select
     from mail_core.mail.domain.enums import ExecutionOrigin, JobStatus, JobType
     from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob, syncable_folder_clauses
-    from mail_core.sync.jobs import enqueue_job
+    from mail_core.sync.jobs import active_dedupe_job_predicates, enqueue_job
 
     interval = (
         poll_interval_s
@@ -243,8 +243,7 @@ def schedule_periodic_inbox_sync(
         dedupe_key = f"delta:{account_id}:{folder_id}"
         in_flight = session.scalar(
             select(WorkerJob.id).where(
-                WorkerJob.dedupe_key == dedupe_key,
-                WorkerJob.status.in_((JobStatus.PENDING.value, JobStatus.CLAIMED.value)),
+                *active_dedupe_job_predicates(dedupe_key),
             ).limit(1)
         )
         if in_flight is not None:
@@ -474,7 +473,7 @@ def _settle_unreachable_probe_result(
         syncable_folder_clauses,
     )
     from mail_core.sync.context import classify_failure
-    from mail_core.sync.jobs import enqueue_job
+    from mail_core.sync.jobs import active_dedupe_job_predicates, enqueue_job
 
     acc = session.scalar(
         select(Account).where(Account.id == account_id).with_for_update()
@@ -670,6 +669,22 @@ def _schedule_periodic_sync_once() -> int:
             log.info("re-checked %s stale unreachable account breaker(s)", checked)
     except Exception:
         log.exception("connectivity breaker re-check sweep failed")
+
+    # t094 AC-006: flush deferred bulk message-table ANALYZE once 300s cooldown elapses.
+    try:
+        from mail_core.sync.retention import flush_deferred_message_stats
+
+        with Session() as session:
+            try:
+                if flush_deferred_message_stats(session):
+                    session.commit()
+                else:
+                    session.rollback()
+            except Exception:
+                session.rollback()
+                raise
+    except Exception:
+        log.exception("deferred message stats flush failed")
     return enqueued
 
 
