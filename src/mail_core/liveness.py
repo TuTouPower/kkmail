@@ -18,12 +18,19 @@ DEFAULT_STAMP_PATH = "/tmp/kkmail-worker-liveness.json"
 
 
 def stamp_path() -> Path:
-    return Path(os.environ.get("MAIL_CORE_LIVENESS_STAMP", DEFAULT_STAMP_PATH))
+    explicit = (os.environ.get("MAIL_CORE_LIVENESS_STAMP") or "").strip()
+    if explicit:
+        return Path(explicit)
+    data_dir = (os.environ.get("MAIL_CORE_DATA_DIR") or "").strip()
+    if data_dir:
+        return Path(data_dir) / "worker-liveness.json"
+    return Path(DEFAULT_STAMP_PATH)
 
 
 def write_liveness_stamp(path: Path | None = None, *, progress: int, worker_id: str) -> None:
     """Atomically refresh the liveness stamp (tmpfs-backed in containers)."""
     target = path or stamp_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps({"progress": progress, "worker_id": worker_id, "v": 1})
     fd, tmp_name = tempfile.mkstemp(prefix=".kkmail-liveness-", dir=str(target.parent))
     try:

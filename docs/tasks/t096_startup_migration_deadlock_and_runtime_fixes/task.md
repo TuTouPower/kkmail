@@ -33,12 +33,12 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：启动迁移入口在任何写路径执行升级或窄转换前先结束只读检查事务并释放检查连接，不产生进程内锁冲突；真实 PostgreSQL 下 `0030` 遗留库经启动迁移入口原地升级至 `20261128_0008` 成功且不阻塞（`test_t8_real_0030_legacy_shape_upgrades_via_startup` 独立及全量通过）；同时真实 PostgreSQL 迁移测试覆盖 `20261126_0007 -> 20261128_0008` 升级后存量 `sync_checkpoints.last_delta_settled_at` 精确回填为各自 `updated_at`。
-- [ ] AC-002：`test_t092_orthogonal_folder_lifecycle.py` 解除对旧版本 `20261126_0007` 的头部相等硬编码，按至少 `20261126_0007` 且仓库头与 `CURRENT_HEAD_REVISION` 一致的方式验证 `0006 <-> 0007 -> head` 迁移往返并在真实 PostgreSQL 通过。
-- [ ] AC-003：`patrol.py` 对本轮已账号级短路的同账号后续目录仅跳过、不写 `folder_patrol_status` 也不计入失败次数；多目录账号首次传输/认证故障后仅首目录写一次 `folder_patrol_status`、同账号写一次冷却状态，其余目录零探测且零数据库写入；冷却过期后恢复探测成功清理过期冷却键；`patrol.py` 与 `readiness.py` 不存在运行时 `__import__` 调用。
-- [ ] AC-004：`load_config({})` 返回的 `db_pool_size`、`db_max_overflow`、`total_slots`、`background_start_slot`、`idle_quota` 与 `IdleWatcherConfig()` 默认 `quota` 全部由 `runtime_budget` 单一来源派生（无硬编码分叉），并在生产配置入口单元测试中直接断言。
-- [ ] AC-005：设置 `MAIL_CORE_DATA_DIR` 且未显式覆盖 `MAIL_CORE_LIVENESS_STAMP` 时，存活戳默认路径隔离至该数据目录；`/ready` 仅在显式配置 `MAIL_CORE_LIVENESS_STAMP` 或嵌入式 Worker 模式启用时校验本地戳，在分布式模式（`MAIL_CORE_EMBEDDED_WORKER=0` 且未配置戳路径）下不受宿主残留 `/tmp/kkmail-worker-liveness.json` 影响；测试运行时隔离 `MAIL_CORE_LIVENESS_STAMP` 至用例临时目录。
-- [ ] AC-006：完整 100% 后端 PostgreSQL 测试套件（0 排除、0 失败）及 `docs/blueprint/testing.md` 定义的快速与黑盒门禁（模板契约、敏感扫描、OpenAPI 校验、前端单测/`tsc`/`build`、桌面端单测、Playwright E2E）全部实测通过，并完成关联 spec 与文档更新。
+- [x] AC-001：启动迁移入口在任何写路径执行升级或窄转换前先结束只读检查事务并释放检查连接，不产生进程内锁冲突；真实 PostgreSQL 下 `0030` 遗留库经启动迁移入口原地升级至 `20261128_0008` 成功且不阻塞（`test_t8_real_0030_legacy_shape_upgrades_via_startup` 独立及全量通过）；同时真实 PostgreSQL 迁移测试覆盖 `20261126_0007 -> 20261128_0008` 升级后存量 `sync_checkpoints.last_delta_settled_at` 精确回填为各自 `updated_at`。
+- [x] AC-002：`test_t092_orthogonal_folder_lifecycle.py` 解除对旧版本 `20261126_0007` 的头部相等硬编码，按至少 `20261126_0007` 且仓库头与 `CURRENT_HEAD_REVISION` 一致的方式验证 `0006 <-> 0007 -> head` 迁移往返并在真实 PostgreSQL 通过。
+- [x] AC-003：`patrol.py` 对本轮已账号级短路的同账号后续目录仅跳过、不写 `folder_patrol_status` 也不计入失败次数；多目录账号首次传输/认证故障后仅首目录写一次 `folder_patrol_status`、同账号写一次冷却状态，其余目录零探测且零数据库写入；冷却过期后恢复探测成功清理过期冷却键；`patrol.py` 与 `readiness.py` 不存在运行时 `__import__` 调用。
+- [x] AC-004：`load_config({})` 返回的 `db_pool_size`、`db_max_overflow`、`total_slots`、`background_start_slot`、`idle_quota` 与 `IdleWatcherConfig()` 默认 `quota` 全部由 `runtime_budget` 单一来源派生（无硬编码分叉），并在生产配置入口单元测试中直接断言。
+- [x] AC-005：设置 `MAIL_CORE_DATA_DIR` 且未显式覆盖 `MAIL_CORE_LIVENESS_STAMP` 时，存活戳默认路径隔离至该数据目录；`/ready` 仅在显式配置 `MAIL_CORE_LIVENESS_STAMP` 或嵌入式 Worker 模式启用时校验本地戳，在分布式模式（`MAIL_CORE_EMBEDDED_WORKER=0` 且未配置戳路径）下不受宿主残留 `/tmp/kkmail-worker-liveness.json` 影响；测试运行时隔离 `MAIL_CORE_LIVENESS_STAMP` 至用例临时目录。
+- [x] AC-006：完整 100% 后端 PostgreSQL 测试套件（0 排除、0 失败）及 `docs/blueprint/testing.md` 定义的快速与黑盒门禁（模板契约、敏感扫描、OpenAPI 校验、前端单测/`tsc`/`build`、桌面端单测、Playwright E2E）全部实测通过，并完成关联 spec 与文档更新。
 
 ### 可测试性声明
 

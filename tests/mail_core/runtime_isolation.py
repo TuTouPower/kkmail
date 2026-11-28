@@ -103,6 +103,7 @@ def isolated_runtime(monkeypatch, tmp_path, session):
         pytest.fail(message, pytrace=False)
     for key, directory in (("MAIL_CORE_BLOB_ROOT", "blobs"), ("MAIL_CORE_BACKUP_DIR", "backups"), ("MAIL_CORE_DATA_DIR", "data")):
         monkeypatch.setenv(key, str(tmp_path / directory))
+    monkeypatch.setenv("MAIL_CORE_LIVENESS_STAMP", str(tmp_path / "liveness.json"))
     monkeypatch.setattr(listener.OutboxListenThread, "__init__", listener_init)
     monkeypatch.setattr(listener.OutboxListenThread, "start", listener_start)
     monkeypatch.setattr(worker, "run", worker_run)

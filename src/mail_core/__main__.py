@@ -69,65 +69,67 @@ def run_migrations(*, check_only: bool = False) -> None:
             ):
                 raise RuntimeError(plan.message)
 
-            if plan.action == baseline.MigrationAction.EMPTY_DATABASE:
-                if check_only:
-                    return
-                command.upgrade(cfg, "head")
-                return
-
-            # A database still stamped at an earlier known revision is upgraded
-            # in place (the new Alembic revision carries the schema change and
-            # forward data mapping); pre-upgrade schema verification is skipped
-            # because the old schema is expected to differ.
-            if plan.action == baseline.MigrationAction.UPGRADE_TO_HEAD:
-                if check_only:
-                    return
-                baseline.upgrade_head_and_verify(db_url)
-                return
-
-            # Verification is dispatched by the shared verify_for_plan, so
-            # check_only and normal startup apply the same standard as the
-            # offline tool (A14): an AT_BASELINE database whose schema has
-            # drifted is refused here instead of being upgraded blindly.
-            errors = baseline.verify_for_plan(conn, plan)
-            if plan.action == baseline.MigrationAction.AT_BASELINE:
+            if plan.action in (
+                baseline.MigrationAction.AT_BASELINE,
+                baseline.MigrationAction.LEGACY,
+            ):
+                # Verification is dispatched by the shared verify_for_plan, so
+                # check_only and normal startup apply the same standard as the
+                # offline tool (A14): an AT_BASELINE database whose schema has
+                # drifted is refused here instead of being upgraded blindly.
+                errors = baseline.verify_for_plan(conn, plan)
                 if errors:
                     detail = "\n  - ".join(errors)
+                    if plan.action == baseline.MigrationAction.AT_BASELINE:
+                        raise RuntimeError(
+                            "Database schema verification failed for unified baseline:\n  - "
+                            + detail
+                            + "\nThe database was not modified."
+                        )
                     raise RuntimeError(
-                        "Database schema verification failed for unified baseline:\n  - "
-                        + detail
-                        + "\nThe database was not modified."
+                        f"Automatic upgrade of this legacy database (revision '{plan.current_revision}') "
+                        "to the unified baseline is not supported: the narrow conversion "
+                        "path only handles the verified legacy shape.\n  - " + detail + "\n"
+                        "The database was not modified. Restore the pre-upgrade sealed "
+                        "backup into a deployment running the matching historical release "
+                        "and resolve the schema there; do not re-run this migration "
+                        "against the same database, it cannot reconstruct the missing schema."
                     )
-                if check_only:
-                    return
-                command.upgrade(cfg, "head")
-                return
-
-            if errors:
-                detail = "\n  - ".join(errors)
-                raise RuntimeError(
-                    f"Automatic upgrade of this legacy database (revision '{plan.current_revision}') "
-                    "to the unified baseline is not supported: the narrow conversion "
-                    "path only handles the verified legacy shape.\n  - " + detail + "\n"
-                    "The database was not modified. Restore the pre-upgrade sealed "
-                    "backup into a deployment running the matching historical release "
-                    "and resolve the schema there; do not re-run this migration "
-                    "against the same database, it cannot reconstruct the missing schema."
-                )
-            if check_only:
-                return
-            try:
-                outcome = baseline.apply_narrow_legacy_conversion(db_url)
-            except baseline.SchemaValidationError as exc:
-                raise RuntimeError(
-                    f"Legacy conversion for revision '{plan.current_revision}' failed and was "
-                    f"rolled back: {exc} The database was not modified."
-                ) from exc
-            log.info("Narrow legacy conversion %s for revision '%s'", outcome, plan.current_revision)
-            baseline.upgrade_head_and_verify(db_url)
-            return
     finally:
+        # Close the read-only check transaction and pool before opening any
+        # DDL/DML migration connection so inspection locks (e.g.
+        # AccessShareLock on sync_checkpoints) never collide with ALTER TABLE.
         check_engine.dispose()
+
+    if check_only:
+        return
+
+    if plan.action == baseline.MigrationAction.EMPTY_DATABASE:
+        command.upgrade(cfg, "head")
+        return
+
+    # A database still stamped at an earlier known revision is upgraded
+    # in place (the new Alembic revision carries the schema change and
+    # forward data mapping); pre-upgrade schema verification is skipped
+    # because the old schema is expected to differ.
+    if plan.action == baseline.MigrationAction.UPGRADE_TO_HEAD:
+        baseline.upgrade_head_and_verify(db_url)
+        return
+
+    if plan.action == baseline.MigrationAction.AT_BASELINE:
+        command.upgrade(cfg, "head")
+        return
+
+    try:
+        outcome = baseline.apply_narrow_legacy_conversion(db_url)
+    except baseline.SchemaValidationError as exc:
+        raise RuntimeError(
+            f"Legacy conversion for revision '{plan.current_revision}' failed and was "
+            f"rolled back: {exc} The database was not modified."
+        ) from exc
+    log.info("Narrow legacy conversion %s for revision '%s'", outcome, plan.current_revision)
+    baseline.upgrade_head_and_verify(db_url)
+    return
 
 
 def _sidecar_address_family(host: str) -> int:

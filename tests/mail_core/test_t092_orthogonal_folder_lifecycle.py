@@ -291,10 +291,10 @@ def test_ac001_migration_0007_replaces_sync_status_and_coalesces_duplicates():
                 {"fid": ids["g_sent_zh"], "st": '{"state": "ok"}', "ts": now},
             )
 
-        assert CURRENT_HEAD_REVISION == "20261126_0007"
-        assert ScriptDirectory.from_config(cfg).get_heads() == ["20261126_0007"]
+        assert CURRENT_HEAD_REVISION >= "20261126_0007"
+        assert ScriptDirectory.from_config(cfg).get_heads() == [CURRENT_HEAD_REVISION]
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "20261126_0007")
 
         with target.connect() as conn:
             cols = {c["name"] for c in inspect(conn).get_columns("folders")}
