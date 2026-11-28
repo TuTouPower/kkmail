@@ -14,7 +14,10 @@ from mail_core.worker.main import schedule_periodic_inbox_sync
 from mail_core.sync.retention import (
     COMPLETED_JOB_PRUNE_BATCH,
     COMPLETED_JOB_RETENTION,
+    MESSAGE_STATS_ANALYZE_COOLDOWN_SECONDS,
     MESSAGE_STATS_BULK_CHANGED_ROWS,
+    MESSAGE_STATS_MIN_INTERVAL_S,
+    MESSAGE_STATS_TABLES,
     PUBLISHED_OUTBOX_PRUNE_BATCH,
     PUBLISHED_OUTBOX_RETENTION,
     is_bulk_message_sync,
@@ -63,6 +66,9 @@ def test_stats_refresh_only_for_bulk_deletes_on_declared_tables():
 
 def test_message_stats_contract_constants_consumed():
     """AC-006: bulk threshold and relative-error bound are declared and used."""
+    assert MESSAGE_STATS_TABLES == ("message_search", "messages", "message_bodies")
+    assert MESSAGE_STATS_ANALYZE_COOLDOWN_SECONDS == 300.0
+    assert MESSAGE_STATS_MIN_INTERVAL_S == MESSAGE_STATS_ANALYZE_COOLDOWN_SECONDS
     assert is_bulk_message_sync(MESSAGE_STATS_BULK_CHANGED_ROWS) is True
     assert is_bulk_message_sync(MESSAGE_STATS_BULK_CHANGED_ROWS - 1) is False
     # Real row-count comparison: each table judged against its own count; a
@@ -97,3 +103,21 @@ def test_migration_backfills_watermark_from_updated_at():
     text = migration.read_text()
     assert "last_delta_settled_at" in text
     assert "SET last_delta_settled_at = updated_at" in text
+
+
+def test_ac003_retention_exceeds_in_flight_reclaim_and_convergence_bounds():
+    """AC-003 quantitative bound: 24h retention >> 300s reclaim and 30m target convergence."""
+    from mail_core.sync.execution import converge_stalled_targets
+    from mail_core.sync.jobs import reclaim_stale_claims
+
+    reclaim_default = inspect.signature(reclaim_stale_claims).parameters["older_than"].default
+    converge_default = inspect.signature(converge_stalled_targets).parameters["stale_after"].default
+
+    assert reclaim_default == timedelta(seconds=300)
+    assert converge_default == timedelta(minutes=30)
+    assert COMPLETED_JOB_RETENTION == timedelta(hours=24)
+    assert PUBLISHED_OUTBOX_RETENTION == timedelta(hours=24)
+    assert reclaim_default < converge_default
+    assert converge_default * 48 <= COMPLETED_JOB_RETENTION
+    assert converge_default * 48 <= PUBLISHED_OUTBOX_RETENTION
+    assert reclaim_default * 288 <= COMPLETED_JOB_RETENTION

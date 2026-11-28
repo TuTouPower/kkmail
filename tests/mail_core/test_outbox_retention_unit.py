@@ -459,3 +459,68 @@ def test_dispatch_without_subscribers_advances_cursor_without_counting(monkeypat
     # Next dispatch starts after seq 5: nothing is re-read or re-counted.
     assert dispatcher.dispatch_once() == 0
     assert dispatcher._last_dispatched_seq == 5
+
+
+def test_replay_post_fetch_prune_race_emits_retention_gap(monkeypatch):
+    """Finding 3: if prune advances past cursor during replay fetch, emit retention_gap."""
+    pruned_values = iter([0, 1])
+    monkeypatch.setattr(sse_mod, "get_session_factory", lambda: (lambda: _FakeDbSession()))
+    monkeypatch.setattr(sse_mod, "publication_head", lambda session: (EPOCH, 2))
+    monkeypatch.setattr(sse_mod, "pruned_through_seq", lambda session: next(pruned_values, 1))
+    monkeypatch.setattr(
+        sse_mod,
+        "fetch_published_since",
+        lambda session, *, after_seq, limit=100, account_id=None: [_fake_row(2)],
+    )
+
+    plan = sse_mod._build_replay(f"v2:{EPOCH}:0", None)
+    assert len(plan.frames) == 1
+    _, event, payload = plan.frames[0]
+    assert event == "client.resync_hint"
+    assert payload["reason"] == "retention_gap"
+    assert payload["pruned_through_seq"] == 1
+    assert payload["last_seq"] == 0
+    assert plan.cursor_seq == 2
+
+
+def test_dispatcher_phase2_prune_race_emits_retention_gap(monkeypatch):
+    """Finding 3: if prune commits between Phase 1 and Phase 2, emit retention_gap."""
+    recorder: list[str] = []
+    pruned_values = iter([0, 1])
+    monkeypatch.setattr(
+        "mail_core.db.session.get_session_factory",
+        lambda: (lambda: _FakeDispatchSession(recorder)),
+    )
+    monkeypatch.setattr(
+        "mail_core.realtime.publication.publish_committed_batch",
+        lambda session, *, limit=100: SimpleNamespace(
+            count=0, first_seq=None, last_seq=None, epoch=uuid.UUID(EPOCH)
+        ),
+    )
+    monkeypatch.setattr(outbox_mod, "publication_head", lambda session: (EPOCH, 2))
+    monkeypatch.setattr(outbox_mod, "pruned_through_seq", lambda session: next(pruned_values, 1))
+    monkeypatch.setattr(
+        outbox_mod,
+        "fetch_published_since",
+        lambda session, *, after_seq, limit=100, account_id=None: [_fake_row(2)],
+    )
+
+    dispatcher = OutboxDispatcher()
+    dispatcher._last_dispatched_seq = 0
+    dispatcher._baseline_established = True
+
+    async def run():
+        queue = dispatcher.subscribe()
+        count = dispatcher.dispatch_once()
+        events = _drain(queue)
+        dispatcher.unsubscribe(queue)
+        return count, events
+
+    count, events = asyncio.run(run())
+    assert count == 0
+    assert dispatcher._last_dispatched_seq == 2
+    assert len(events) == 1
+    assert events[0]["event"] == "client.resync_hint"
+    assert events[0]["data"]["reason"] == "retention_gap"
+    assert events[0]["data"]["pruned_through_seq"] == 1
+    assert events[0]["data"]["last_seq"] == 0

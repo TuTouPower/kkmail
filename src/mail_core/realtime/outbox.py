@@ -32,6 +32,26 @@ class OutboxItem:
     created_at: datetime
 
 
+def enter_repeatable_read_if_postgres(session: Any) -> None:
+    """Pin PostgreSQL reads in this session to one REPEATABLE READ snapshot.
+
+    Safe no-op for non-PostgreSQL backends and minimal unit test session doubles.
+    Must be called before the first SQL statement in the session transaction.
+    """
+    get_bind = getattr(session, "get_bind", None)
+    connection = getattr(session, "connection", None)
+    if not callable(get_bind) or not callable(connection):
+        return
+    try:
+        bind = get_bind()
+    except Exception:
+        return
+    dialect = getattr(bind, "dialect", None)
+    if getattr(dialect, "name", None) != "postgresql":
+        return
+    connection(execution_options={"isolation_level": "REPEATABLE READ"})
+
+
 def publication_head(session: Session) -> tuple[str, int]:
     """Return current publication stream epoch and highest publication_seq."""
     from mail_core.realtime.publication import get_publication_state

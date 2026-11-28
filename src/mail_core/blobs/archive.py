@@ -52,6 +52,7 @@ from mail_core.providers.connection_slots import (
 )
 from mail_core.providers.factory import build_provider
 from mail_core.sync.jobs import enqueue_job
+from mail_core.sync.retention import record_message_stats_rows
 
 log = logging.getLogger("mail_core.blobs.archive")
 
@@ -1368,6 +1369,7 @@ def run_archive_batch(
                         },
                     )
                 )
+                record_message_stats_rows(session, 1)
                 session.commit()
                 completed += 1
                 log.info("archive commit success message=%s", mid)
