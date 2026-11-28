@@ -6,15 +6,20 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, text
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import OutboxEvent, OutboxPublicationState
+from mail_core.sync.retention import (
+    PUBLISHED_OUTBOX_PRUNE_BATCH,
+    PUBLISHED_OUTBOX_RETENTION,
+    refresh_table_stats_if_bulk,
+)
 
 # Retention deletes at most this many rows per call (design §9.2); larger
 # backlogs are drained incrementally by repeated worker sweeps.
-MAX_PRUNE_BATCH = 5000
-RETENTION_WINDOW = timedelta(days=7)
+MAX_PRUNE_BATCH = PUBLISHED_OUTBOX_PRUNE_BATCH
+RETENTION_WINDOW = PUBLISHED_OUTBOX_RETENTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,4 +166,6 @@ def prune_published(
     session.execute(delete(OutboxEvent).where(OutboxEvent.id.in_([r.id for r in prefix])))
     state.pruned_through_seq = int(prefix[-1].publication_seq)
     session.flush()
+    if refresh_table_stats_if_bulk(len(prefix), "outbox"):
+        session.execute(text("ANALYZE outbox"))
     return len(prefix)

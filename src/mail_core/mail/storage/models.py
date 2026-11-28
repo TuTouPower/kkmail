@@ -318,6 +318,9 @@ class SyncCheckpoint(Base):
     # Last fencing token that successfully committed this checkpoint.
     fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # t094: authoritative scheduling watermark for delta execution-chain settlement.
+    # NULL means "baseline ready but no delta has completed yet" (first pass due).
+    last_delta_settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class SyncRun(Base):
@@ -465,6 +468,12 @@ class WorkerJob(Base):
     __table_args__ = (
         Index("ix_worker_jobs_claim", "status", "run_after", "priority"),
         Index("ix_worker_jobs_dedupe_active", "dedupe_key", unique=True, postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'claimed')")),
+        # t094: terminal cleanup / retention scan over completed jobs.
+        Index(
+            "ix_worker_jobs_terminal_cleanup",
+            "updated_at",
+            postgresql_where=text("status IN ('done', 'failed')"),
+        ),
         CheckConstraint(
             "execution_origin IN ('foreground', 'background')",
             name="ck_worker_jobs_execution_origin",

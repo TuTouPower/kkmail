@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import uuid
 from dataclasses import dataclass, fields, replace
 from datetime import datetime, timedelta, timezone
@@ -52,6 +54,32 @@ from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.sync.metadata import messages_upserted_event, upsert_messages
 from mail_core.search.index import upsert_message_search
 from mail_core.threading.rules import assign_thread_for_message
+from mail_core.sync.retention import (
+    MESSAGE_STATS_MIN_INTERVAL_S,
+    MESSAGE_STATS_TABLES,
+    is_bulk_message_sync,
+)
+
+_last_message_stats_refresh: float = float("-inf")
+_message_stats_lock = threading.Lock()
+
+
+def _refresh_message_stats_if_bulk(session: Session, changed_rows: int) -> None:
+    """ANALYZE message tables once after a bulk sync, with a process-local cap."""
+    global _last_message_stats_refresh
+    if not is_bulk_message_sync(changed_rows):
+        return
+    now = time.monotonic()
+    from sqlalchemy import text
+
+    # Serialize the cap across worker slots; the timestamp is published only
+    # after the ANALYZE statements are issued into the (still-open) transaction.
+    with _message_stats_lock:
+        if now - _last_message_stats_refresh < MESSAGE_STATS_MIN_INTERVAL_S:
+            return
+        for table in MESSAGE_STATS_TABLES:
+            session.execute(text(f"ANALYZE {table}"))
+        _last_message_stats_refresh = now
 
 log = logging.getLogger("mail_core.sync.delta")
 
@@ -654,6 +682,18 @@ def sync_folder_delta(
                     "followup_coalesced": followup_coalesced,
                     **totals,
                 }
+            # t094 AC-006: a data page has been applied in this transaction.
+            # Refresh message-table stats when the cumulative changed rows
+            # reach the bulk threshold, so a later page deferral (rate limit,
+            # capacity, fencing) cannot lose the refresh for already-written
+            # data. The helper's frequency cap keeps short deltas cheap.
+            _refresh_message_stats_if_bulk(
+                session,
+                totals.get("upserted", 0)
+                + totals.get("deleted", 0)
+                + result.upserted
+                + result.deleted,
+            )
             session.commit()
             totals["upserted"] += result.upserted
             totals["deleted"] += result.deleted
@@ -703,6 +743,17 @@ def sync_folder_delta(
                 priority=priority,
                 dedupe_key=f"delta:{account_id}:{folder_id}",
             )
+        _refresh_message_stats_if_bulk(
+            session, totals.get("upserted", 0) + totals.get("deleted", 0)
+        )
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
         session.commit()
-    return {"status": "ok", "exhausted": exhausted, "pages": pages, **totals}
+    # t094: carry the execution fencing token so settlement can reject a
+    # superseded run that commits late (monotonic token comparison).
+    return {
+        "status": "ok",
+        "exhausted": exhausted,
+        "pages": pages,
+        "fencing_token": fencing,
+        **totals,
+    }

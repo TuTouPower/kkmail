@@ -22,9 +22,9 @@ kkmail 的核心领域概念与数据实体术语表。各层代码、数据迁�
 |**AuthCredential**|`auth_credentials`|登录密码与会话状态持久化存储。权威记录登录 bcrypt hash 与全局 `session_epoch` 版本号。|
 |**Thread**|`threads`|邮件会话线程。按账户与提供商线程键 (`provider_thread_key`) 聚合多封邮件。|
 |**ThreadMessage**|`thread_messages`|线程与邮件的关联位置。记录邮件在线程中的顺序 (`position`)，线程与邮件组合唯一。|
-|**SyncCheckpoint**|`sync_checkpoints`|同步检查点。按账户与文件夹保存增量同步游标 (`cursor`、`uidvalidity`、`modseq`、`history_id` 等) 与全量扫描完成状态。|
+|**SyncCheckpoint**|`sync_checkpoints`|同步检查点。按账户与文件夹保存增量同步游标 (`cursor`、`uidvalidity`、`modseq`、`history_id` 等) 与全量扫描完成状态；`last_delta_settled_at` 为周期增量轮询的唯一权威水位，记录最近一次 delta 执行链结算时间，单调推进，`NULL` 表示基线就绪但尚未完成任何 delta（首次到期）。|
 |**SyncRun**|`sync_runs`|同步运行记录。记录一次同步运行的阶段、状态、统计与错误。|
-|**WorkerJob**|`worker_jobs`|后台任务队列。基于 PostgreSQL 的任务表，以 `FOR UPDATE SKIP LOCKED` 领取，支持去重、优先级与 `run_after` 调度。|
+|**WorkerJob**|`worker_jobs`|后台任务队列。基于 PostgreSQL 的任务表，以 `FOR UPDATE SKIP LOCKED` 领取，支持去重、优先级与 `run_after` 调度；终态行仅作短时排障缓冲（默认 24h），由 `(updated_at) WHERE status IN ('done','failed')` 部分索引支撑回收，关联未结算同步请求目标者暂不回收。|
 |**MessageArchiveState**|`message_archive_state`|邮件归档状态。逐封邮件的 MIME 归档状态机，记录状态、优先级、认领与重试信息。|
 |**CredentialSecret**|`credential_secrets`|提供商凭据密文。以 `ref` 为主键，AES-GCM 加密保存 OAuth token 与 IMAP 口令；`Account.credential_ref` 指向本表。|
 |**AppSetting**|`app_settings`|应用设置。非密键值设置，不得存放口令或 token。|

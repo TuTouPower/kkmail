@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,8 +18,74 @@ from mail_core.mail.domain.enums import (
     normalize_execution_origin,
 )
 from mail_core.mail.domain.failures import StructuredFailure
-from mail_core.mail.storage.models import WorkerJob
+from mail_core.mail.storage.models import (
+    SyncRequestTarget,
+    SyncRequestTargetJob,
+    WorkerJob,
+)
 from mail_core.sync.context import coalesce_execution_origin
+from mail_core.sync.retention import (
+    COMPLETED_JOB_RETENTION,
+    COMPLETED_JOB_PRUNE_BATCH,
+    refresh_table_stats_if_bulk,
+)
+
+
+def _advance_delta_watermark_on_settle(
+    session: Session,
+    job: WorkerJob,
+    *,
+    settled: bool,
+    result: dict | None = None,
+    now: datetime | None = None,
+) -> None:
+    """t094: advance the authoritative delta watermark in the settling transaction.
+
+    Called from ``complete_job`` (with the job result) and ``fail_job`` (terminal
+    failure) so the watermark and terminal job state commit atomically. Only a
+    genuine delta execution-chain settlement advances it; deferrals, handoffs
+    and superseded runs are filtered by ``is_delta_settled_result``. Monotonic
+    advancement stops a superseded execution that commits late from moving the
+    watermark backwards.
+    """
+    if getattr(job, "job_type", None) != JobType.SYNC_FOLDER_DELTA.value:
+        return
+    if getattr(job, "account_id", None) is None:
+        return
+    payload = getattr(job, "payload", None) or {}
+    folder_raw = payload.get("folder_id")
+    if not folder_raw:
+        return
+    if settled:
+        if result is not None:
+            from mail_core.sync.checkpoints import is_delta_settled_result
+
+            if not is_delta_settled_result(result):
+                return
+    else:
+        return
+    try:
+        folder_id = uuid.UUID(str(folder_raw))
+    except (ValueError, AttributeError, TypeError):
+        return
+    from mail_core.sync.checkpoints import advance_delta_settlement_watermark
+
+    # t094: capture the execution's fencing token from the delta result when
+    # present; the monotonic token comparison in the watermark helper rejects
+    # a superseded execution that commits late.
+    fencing_token = None
+    if result is not None and result.get("fencing_token") is not None:
+        try:
+            fencing_token = int(result["fencing_token"])
+        except (ValueError, TypeError):
+            fencing_token = None
+    advance_delta_settlement_watermark(
+        session,
+        account_id=job.account_id,
+        folder_id=folder_id,
+        settled_at=now,
+        fencing_token=fencing_token,
+    )
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
@@ -493,6 +559,7 @@ def complete_job(
 
     request_ids = settle_job_links(session, locked_job, outcome="complete", result=result)
     refresh_requests(session, request_ids)
+    _advance_delta_watermark_on_settle(session, locked_job, settled=True, result=result)
 
     return successor_job
 
@@ -631,6 +698,10 @@ def fail_job(
         job.status = JobStatus.FAILED.value
         job.locked_by = None
         job.locked_at = None
+        # t094: terminal failure is a delta execution-chain settlement (retry
+        # exhausted); advance the watermark in this same commit so a failed
+        # folder is still due on the next interval rather than stuck or spun.
+        _advance_delta_watermark_on_settle(session, job, settled=True, result=None, now=now)
     session.flush()
     # Terminal failure: bound targets fail with a stable code + sanitized text.
     from mail_core.sync.execution import refresh_requests, settle_job_links
@@ -713,6 +784,11 @@ def reclaim_stale_claims(
                 error_code="job_failed",
                 safe_error=job.last_error,
             )
+            # t094: a crash-loop job hitting the attempt cap is a terminal
+            # delta settlement too; advance the watermark in this same commit.
+            _advance_delta_watermark_on_settle(
+                session, job, settled=True, result=None, now=now
+            )
         refresh_requests(session, request_ids)
     return len(rows)
 
@@ -720,18 +796,30 @@ def reclaim_stale_claims(
 def prune_completed_jobs(
     session: Session,
     *,
-    older_than: timedelta = timedelta(days=7),
+    older_than: timedelta = COMPLETED_JOB_RETENTION,
     now: datetime | None = None,
-    limit: int = 1000,
+    limit: int = COMPLETED_JOB_PRUNE_BATCH,
 ) -> int:
-    """Delete DONE and terminal FAILED jobs updated before cutoff to bound table growth."""
+    """Delete terminal jobs past the retention window (t094 AC-003/007).
+
+    A terminal job whose sync-request target is still open is excluded: its
+    link may carry a failure that target re-aggregation still needs (a sibling
+    link can still be running). Deleting it early could flip a correctly-failed
+    request to success once the slow sibling completes. Only jobs whose links
+    belong exclusively to already-settled targets are reclaimable.
+    """
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
+    open_target_link_jobs = select(SyncRequestTargetJob.job_id).join(
+        SyncRequestTarget,
+        SyncRequestTarget.id == SyncRequestTargetJob.target_id,
+    ).where(SyncRequestTarget.state.in_(("queued", "running")))
     ids = list(
         session.scalars(
             select(WorkerJob.id)
             .where(WorkerJob.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]))
             .where(WorkerJob.updated_at < cutoff)
+            .where(WorkerJob.id.not_in(open_target_link_jobs))
             .order_by(WorkerJob.updated_at.asc())
             .limit(max(1, int(limit)))
         ).all()
@@ -740,4 +828,6 @@ def prune_completed_jobs(
         return 0
     session.execute(delete(WorkerJob).where(WorkerJob.id.in_(ids)))
     session.flush()
+    if refresh_table_stats_if_bulk(len(ids), "worker_jobs"):
+        session.execute(text("ANALYZE worker_jobs"))
     return len(ids)
