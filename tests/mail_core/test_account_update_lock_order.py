@@ -283,3 +283,337 @@ def test_combined_patch_vs_sidebar_first_transaction_no_deadlock_pg(monkeypatch)
         assert row is not None
         assert row.group_id == group_id
         assert row.sync_enabled is False
+
+
+def _wait_until_waiting_on_tx(session_factory, *, query_substring: str, timeout_s: float = 5.0) -> None:
+    import time
+    from sqlalchemy import text
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        with session_factory() as probe:
+            waiting = probe.execute(
+                text(
+                    "SELECT 1 FROM pg_stat_activity "
+                    "WHERE datname = current_database() "
+                    "AND state = 'active' "
+                    "AND wait_event = 'transactionid' "
+                    "AND query ILIKE :pat "
+                    "LIMIT 1"
+                ),
+                {"pat": f"%{query_substring}%"},
+            ).first()
+            if waiting is not None:
+                return
+        time.sleep(0.02)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set (PG deadlock reproduction requires real PostgreSQL)",
+)
+def test_save_sidebar_layout_vs_worker_grouped_fk_and_health_update_no_deadlock_pg():
+    """Real PG regression for full-stack E2E 40P01: save_sidebar_layout vs worker health update.
+
+    Reproduces the exact deadlock caught in full_stack E2E: grouped account rows
+    are held with FK ``FOR KEY SHARE`` (``MultiXact`` across concurrent worker
+    slots) while ``save_sidebar_layout`` takes ``FOR UPDATE`` on
+    ``account_groups`` then ``accounts`` (blocking on ``accounts``). When the
+    worker then updates ``accounts`` (non-HOT / FK ``RI_FKey_check_upd`` checks
+    ``account_groups`` with ``FOR KEY SHARE``), PG deadlocks (40P01) if
+    ``save_sidebar_layout`` uses ``FOR UPDATE`` instead of ``FOR NO KEY UPDATE``.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from mail_core.accounts.health import record_connectivity_success, set_sync_activity
+    from mail_core.accounts.service import create_group, get_sidebar_layout, save_sidebar_layout
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import OutboxEventType
+    from mail_core.mail.storage.models import OutboxEvent
+
+    Session = get_session_factory()
+    with Session() as session:
+        grp = create_group(session, name=f"lock-grp-{uuid.uuid4().hex[:6]}")
+        group_id = grp.id
+        session.commit()
+
+    account_a = accounts_app.create_account_app(
+        email=f"layout-lock-a-{uuid.uuid4().hex[:8]}@example.test",
+        provider="memory",
+        group_id=group_id,
+    )
+    account_b = accounts_app.create_account_app(
+        email=f"layout-lock-b-{uuid.uuid4().hex[:8]}@example.test",
+        provider="memory",
+        group_id=group_id,
+    )
+    _, target_id = sorted([uuid.UUID(account_a.id), uuid.UUID(account_b.id)])
+
+    with Session() as session:
+        snap = get_sidebar_layout(session)
+
+    fk1, fk2, release_w1, release_w2 = Event(), Event(), Event(), Event()
+
+    def worker_1():
+        try:
+            with Session() as session:
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.SYNC_PROGRESS.value,
+                        account_id=target_id,
+                        payload={"folder_id": str(uuid.uuid4()), "status": "ok"},
+                    )
+                )
+                session.flush()
+                fk1.set()
+                assert release_w1.wait(10)
+                record_connectivity_success(session, target_id)
+                set_sync_activity(session, target_id, active=False)
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    def worker_2():
+        try:
+            with Session() as session:
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.SYNC_PROGRESS.value,
+                        account_id=target_id,
+                        payload={"folder_id": str(uuid.uuid4()), "status": "ok"},
+                    )
+                )
+                session.flush()
+                fk2.set()
+                assert release_w2.wait(10)
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    def layout_tx():
+        try:
+            with Session() as session:
+                save_sidebar_layout(
+                    session,
+                    expected_revision=str(snap["revision"]),
+                    group_ids=list(snap["group_ids"]),
+                    master_account_ids=list(reversed(list(snap["master_account_ids"]))),
+                    ungrouped_account_ids=list(snap["ungrouped_account_ids"]),
+                    group_account_ids=dict(snap["group_account_ids"]),
+                )
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f1 = pool.submit(worker_1)
+        assert fk1.wait(10)
+        f2 = pool.submit(worker_2)
+        assert fk2.wait(10)
+        fl = pool.submit(layout_tx)
+        # Wait briefly if layout_tx blocks (buggy FOR UPDATE); when fixed with
+        # FOR NO KEY UPDATE, layout_tx finishes immediately without blocking.
+        try:
+            fl.result(timeout=0.25)
+        except Exception:
+            pass
+        if not fl.done():
+            _wait_until_waiting_on_tx(Session, query_substring="FROM accounts", timeout_s=2.0)
+        release_w1.set()
+        try:
+            f1.result(timeout=2.5)
+        except Exception:
+            pass
+        release_w2.set()
+        results = [f1.result(20), f2.result(20), fl.result(20)]
+
+    assert results == ["ok", "ok", "ok"], results
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set (PG deadlock reproduction requires real PostgreSQL)",
+)
+def test_reset_sidebar_account_order_vs_worker_grouped_fk_and_health_update_no_deadlock_pg():
+    """Real PG regression: reset_sidebar_account_order also uses FOR NO KEY UPDATE."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from mail_core.accounts.health import record_connectivity_success, set_sync_activity
+    from mail_core.accounts.service import (
+        create_group,
+        get_sidebar_layout,
+        reset_sidebar_account_order,
+    )
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import OutboxEventType
+    from mail_core.mail.storage.models import OutboxEvent
+
+    Session = get_session_factory()
+    with Session() as session:
+        grp = create_group(session, name=f"reset-grp-{uuid.uuid4().hex[:6]}")
+        group_id = grp.id
+        session.commit()
+
+    account_a = accounts_app.create_account_app(
+        email=f"reset-lock-a-{uuid.uuid4().hex[:8]}@example.test",
+        provider="memory",
+        group_id=group_id,
+    )
+    account_b = accounts_app.create_account_app(
+        email=f"reset-lock-b-{uuid.uuid4().hex[:8]}@example.test",
+        provider="memory",
+        group_id=group_id,
+    )
+    _, target_id = sorted([uuid.UUID(account_a.id), uuid.UUID(account_b.id)])
+
+    with Session() as session:
+        snap = get_sidebar_layout(session)
+
+    fk1, fk2, release_w1, release_w2 = Event(), Event(), Event(), Event()
+
+    def worker_1():
+        try:
+            with Session() as session:
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.SYNC_PROGRESS.value,
+                        account_id=target_id,
+                        payload={"folder_id": str(uuid.uuid4()), "status": "ok"},
+                    )
+                )
+                session.flush()
+                fk1.set()
+                assert release_w1.wait(10)
+                record_connectivity_success(session, target_id)
+                set_sync_activity(session, target_id, active=False)
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    def worker_2():
+        try:
+            with Session() as session:
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.SYNC_PROGRESS.value,
+                        account_id=target_id,
+                        payload={"folder_id": str(uuid.uuid4()), "status": "ok"},
+                    )
+                )
+                session.flush()
+                fk2.set()
+                assert release_w2.wait(10)
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    def reset_tx():
+        try:
+            with Session() as session:
+                reset_sidebar_account_order(session, expected_revision=str(snap["revision"]))
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f1 = pool.submit(worker_1)
+        assert fk1.wait(10)
+        f2 = pool.submit(worker_2)
+        assert fk2.wait(10)
+        fr = pool.submit(reset_tx)
+        try:
+            fr.result(timeout=0.25)
+        except Exception:
+            pass
+        if not fr.done():
+            _wait_until_waiting_on_tx(Session, query_substring="FROM accounts", timeout_s=2.0)
+        release_w1.set()
+        try:
+            f1.result(timeout=2.5)
+        except Exception:
+            pass
+        release_w2.set()
+        results = [f1.result(20), f2.result(20), fr.result(20)]
+
+    assert results == ["ok", "ok", "ok"], results
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set (PG deadlock reproduction requires real PostgreSQL)",
+)
+def test_delete_group_vs_worker_grouped_health_update_no_deadlock_pg():
+    """Real PG regression: delete_group clears member accounts before deleting the group."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from mail_core.accounts.health import record_connectivity_success, set_sync_activity
+    from mail_core.accounts.service import create_group, delete_group
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import OutboxEventType
+    from mail_core.mail.storage.models import OutboxEvent
+
+    Session = get_session_factory()
+    with Session() as session:
+        grp = create_group(session, name=f"del-grp-{uuid.uuid4().hex[:6]}")
+        group_id = grp.id
+        session.commit()
+
+    account = accounts_app.create_account_app(
+        email=f"del-grp-acc-{uuid.uuid4().hex[:8]}@example.test",
+        provider="memory",
+        group_id=group_id,
+    )
+    account_id = uuid.UUID(account.id)
+
+    fk1, release_w1 = Event(), Event()
+
+    def worker_1():
+        try:
+            with Session() as session:
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.SYNC_PROGRESS.value,
+                        account_id=account_id,
+                        payload={"folder_id": str(uuid.uuid4()), "status": "ok"},
+                    )
+                )
+                session.flush()
+                fk1.set()
+                assert release_w1.wait(10)
+                record_connectivity_success(session, account_id)
+                set_sync_activity(session, account_id, active=False)
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    def delete_tx():
+        try:
+            with Session() as session:
+                delete_group(session, group_id)
+                session.commit()
+            return "ok"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}".splitlines()[0]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(worker_1)
+        assert fk1.wait(10)
+        fd = pool.submit(delete_tx)
+        release_w1.set()
+        results = [f1.result(20), fd.result(20)]
+
+    assert results == ["ok", "ok"], results
+    with Session() as session:
+        acc = session.get(Account, account_id)
+        assert acc is not None
+        assert acc.group_id is None

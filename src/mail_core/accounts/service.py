@@ -299,8 +299,7 @@ def save_sidebar_layout(
     group_account_ids: dict[uuid.UUID, list[uuid.UUID]],
 ) -> None:
     lock_sidebar_layout(session)
-    groups = list(session.scalars(select(AccountGroup).order_by(AccountGroup.id).with_for_update()).all())
-    accounts = list(session.scalars(select(Account).order_by(Account.id).with_for_update()).all())
+    groups, accounts = _lock_sidebar_entities(session)
     if _sidebar_layout_revision(groups, accounts) != expected_revision:
         raise StaleSidebarLayoutError("sidebar layout changed; reload and retry")
     _validate_sidebar_layout(group_ids, master_account_ids, ungrouped_account_ids, group_account_ids, groups, accounts)
@@ -421,8 +420,7 @@ def _apply_sidebar_layout(
 
 def reset_sidebar_account_order(session: Session, *, expected_revision: str) -> None:
     lock_sidebar_layout(session)
-    groups = list(session.scalars(select(AccountGroup).order_by(AccountGroup.id).with_for_update()).all())
-    accounts = list(session.scalars(select(Account).order_by(Account.id).with_for_update()).all())
+    groups, accounts = _lock_sidebar_entities(session)
     if _sidebar_layout_revision(groups, accounts) != expected_revision:
         raise StaleSidebarLayoutError("sidebar layout changed; reload and retry")
     for account in accounts:
@@ -459,14 +457,53 @@ def enabled_account_ids(session: Session, group_id: uuid.UUID | None = None) -> 
 
 def delete_group(session: Session, group_id: uuid.UUID) -> None:
     lock_sidebar_layout(session)
-    g = session.scalar(select(AccountGroup).where(AccountGroup.id == group_id).with_for_update())
+    # FOR NO KEY UPDATE avoids conflicting with worker FK checks (RI_FKey_check_upd)
+    # while still serializing group existence under lock_sidebar_layout; member
+    # accounts are locked in canonical ID order and detached before deleting the
+    # group row so no live worker transaction can re-check a stale group FK.
+    g = session.scalar(
+        select(AccountGroup).where(AccountGroup.id == group_id).with_for_update(key_share=True)
+    )
     if g is None:
         raise LookupError("group not found")
-    for account in session.scalars(select(Account).where(Account.group_id == group_id).with_for_update()):
+    accounts = list(
+        session.scalars(
+            select(Account)
+            .where(Account.group_id == group_id)
+            .order_by(Account.id)
+            .with_for_update(key_share=True)
+        ).all()
+    )
+    for account in accounts:
         account.group_id = None
         account.group_order = None
+    if accounts:
+        session.flush()
     session.delete(g)
     session.flush()
+
+
+def _lock_sidebar_entities(session: Session) -> tuple[list[AccountGroup], list[Account]]:
+    """Lock all groups and accounts for non-PK organization updates.
+
+    Uses ``FOR NO KEY UPDATE`` (``key_share=True``) instead of ``FOR UPDATE``:
+    sidebar layout edits never delete rows or mutate primary keys, and
+    ``FOR UPDATE`` conflicts with PostgreSQL ``FOR KEY SHARE`` locks taken both
+    by child-table FK writes on ``accounts`` (outbox/jobs/sync tables) and by
+    ``RI_FKey_check_upd`` on ``account_groups`` during concurrent worker updates
+    to grouped accounts, which causes 40P01 deadlocks.
+    """
+    groups = list(
+        session.scalars(
+            select(AccountGroup).order_by(AccountGroup.id).with_for_update(key_share=True)
+        ).all()
+    )
+    accounts = list(
+        session.scalars(
+            select(Account).order_by(Account.id).with_for_update(key_share=True)
+        ).all()
+    )
+    return groups, accounts
 
 
 def lock_sidebar_layout(session: Session) -> None:
