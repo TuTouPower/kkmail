@@ -5,13 +5,17 @@ the startup orchestration (``mail_core.__main__.run_migrations``) and the
 offline wrapper (``scripts/migrate_to_unified_baseline.py``) build a
 :class:`DatabaseState` and a :class:`RevisionContext`, then act on the single
 returned :class:`MigrationPlan`, so the two entries cannot disagree about which
-state a database is in. Execution is unified: a database behind head (or a
-supported narrow legacy database) is converted where needed, then both entries
-replay the incremental Alembic chain to head through
-:func:`upgrade_head_and_verify` and only then run the full
-:func:`verify_baseline_schema` comparison against the ORM. An empty database,
-or any no-version database carrying unified-baseline business tables, is
-refused by both entries.
+state a database is in. Execution is unified behind the single executor
+:func:`execute_migration`: it owns the read-only check phase (through
+:func:`read_only_connection`), the release of that connection, and the write
+dispatch for the returned plan, so no entry orchestrates its own check
+connection or write phase. A database behind head (or a supported narrow
+legacy database) is converted where needed, then both entries replay the
+incremental Alembic chain to head through :func:`upgrade_head_and_verify` and
+only then run the full :func:`verify_baseline_schema` comparison against the
+ORM. An empty database is initialized by the startup entry but refused by the
+offline tool; any no-version database carrying unified-baseline business
+tables is refused by both entries.
 
 Read-only checks open their own connection with a read-only transaction
 (``SET TRANSACTION READ ONLY`` on PostgreSQL) plus connection and statement
@@ -31,7 +35,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 if TYPE_CHECKING:
     from alembic.config import Config
@@ -1144,16 +1148,214 @@ def plan_migration(state: DatabaseState, *, context: RevisionContext) -> Migrati
     )
 
 
+class MigrationMode(str, Enum):
+    """How far one executor run may go for an entry point."""
+
+    WRITE = "write"
+    CHECK_ONLY = "check_only"
+    DRY_RUN = "dry_run"
+
+
+@dataclass(frozen=True)
+class MigrationPolicy:
+    """The per-entry behaviour the shared executor honours.
+
+    Classification, verification and write dispatch are identical for every
+    entry; a policy carries only what legitimately differs between them:
+    whether an empty database may be initialized (startup and
+    ``--migrate-only`` create the schema; the offline tool refuses and points
+    at startup instead), how a failed narrow-conversion precondition check is
+    worded for the entry's operator, whether a conversion
+    :class:`SchemaValidationError` is re-wrapped for the entry, and the
+    at-baseline write action (startup replays the Alembic chain, which is a
+    no-op at head; the offline tool re-stamps instead and never replays the
+    chain against a database that needs no upgrade).
+    """
+
+    initialize_empty_database: bool
+    legacy_verification_error: Callable[[MigrationPlan, str], str]
+    wrap_conversion_errors: bool
+    replay_chain_at_baseline: bool
+
+
+def _startup_legacy_verification_error(plan: MigrationPlan, detail: str) -> str:
+    return (
+        f"Automatic upgrade of this legacy database (revision '{plan.current_revision}') "
+        "to the unified baseline is not supported: the narrow conversion "
+        "path only handles the verified legacy shape.\n  - " + detail + "\n"
+        "The database was not modified. Restore the pre-upgrade sealed "
+        "backup into a deployment running the matching historical release "
+        "and resolve the schema there; do not re-run this migration "
+        "against the same database, it cannot reconstruct the missing schema."
+    )
+
+
+def _offline_legacy_verification_error(plan: MigrationPlan, detail: str) -> str:
+    return (
+        "Automatic upgrade of this legacy database to the unified baseline is "
+        "not supported: its schema is missing tables or columns that the offline "
+        "tool cannot reconstruct (the alembic versions tree ships only the unified "
+        "baseline, so incremental migrations cannot be replayed). Restore the "
+        "pre-upgrade sealed backup into a fresh deployment instead.\n  - " + detail
+    )
+
+
+STARTUP_POLICY = MigrationPolicy(
+    initialize_empty_database=True,
+    legacy_verification_error=_startup_legacy_verification_error,
+    wrap_conversion_errors=True,
+    replay_chain_at_baseline=True,
+)
+
+OFFLINE_POLICY = MigrationPolicy(
+    initialize_empty_database=False,
+    legacy_verification_error=_offline_legacy_verification_error,
+    wrap_conversion_errors=False,
+    replay_chain_at_baseline=False,
+)
+
+def _stamp_at_baseline(database_url: str) -> None:
+    """The offline entry's at-baseline write: re-stamp in one transaction.
+
+    The catalog is already at head and was fully verified in the check
+    phase; the stamp is a no-op for a genuine at-head database (and refuses
+    to overwrite anything unexpected), so the offline tool never replays
+    the Alembic chain against a database that needs no upgrade.
+    """
+    engine = create_engine(check_connect_url(database_url))
+    try:
+        with engine.begin() as conn:
+            stamp_unified_baseline(conn, dry_run=False)
+    finally:
+        engine.dispose()
+
+
+# Classifications no entry may proceed past: the plan message is the refusal.
+_REFUSAL_ACTIONS: frozenset[MigrationAction] = frozenset({
+    MigrationAction.MULTIPLE_VERSIONS,
+    MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
+    MigrationAction.UNKNOWN_REVISION,
+    MigrationAction.NEWER_THAN_CODE,
+    MigrationAction.LEGACY_UNSUPPORTED,
+})
+
+
+def execute_migration(
+    database_url: str,
+    *,
+    mode: MigrationMode,
+    policy: MigrationPolicy,
+) -> MigrationPlan:
+    """Run one entry's migration check and, in WRITE mode, its write plan.
+
+    The single executor behind CLI startup, ``--migrate-only``,
+    ``--check-migrations`` and the offline tool. The check phase runs inside
+    :func:`read_only_connection` and produces a :class:`MigrationPlan` — a
+    plain value independent of the connection. The read-only engine is
+    disposed when the check phase ends, before the write phase dispatches,
+    so a check transaction (and its locks) can never overlap a write
+    connection, for every entry, by construction. CHECK_ONLY and DRY_RUN
+    return after the check phase and perform zero writes.
+    """
+    from alembic import command
+
+    cfg = alembic_config()
+    context = revision_context(cfg)
+
+    with read_only_connection(database_url) as conn:
+        plan = plan_migration(read_database_state(conn), context=context)
+        LOG.info(
+            "Migration classification: %s (alembic_version %s)",
+            plan.action.value,
+            plan.current_revision,
+        )
+        if plan.action in _REFUSAL_ACTIONS:
+            raise SchemaValidationError(plan.message)
+        if (
+            plan.action is MigrationAction.EMPTY_DATABASE
+            and not policy.initialize_empty_database
+        ):
+            raise SchemaValidationError(plan.message)
+        errors = verify_for_plan(conn, plan)
+        if errors:
+            detail = "\n  - ".join(errors)
+            if plan.action is MigrationAction.LEGACY:
+                raise SchemaValidationError(
+                    policy.legacy_verification_error(plan, detail)
+                )
+            raise SchemaValidationError(
+                "Database schema verification failed for unified baseline:\n  - "
+                + detail
+                + "\nThe database was not modified."
+            )
+
+    # The read-only check connection is closed and its engine disposed at
+    # this point; only now may a write connection open.
+    LOG.info("Database schema verification passed. All tables and columns present.")
+
+    if mode is not MigrationMode.WRITE:
+        return plan
+
+    if plan.action is MigrationAction.EMPTY_DATABASE:
+        # An empty database is initialized by replaying the whole chain.
+        cfg.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+        command.upgrade(cfg, "head")
+        return plan
+
+    if plan.action is MigrationAction.AT_BASELINE:
+        # The catalog is already at head and was fully verified in the check
+        # phase; the write action is the entry's no-op convergence step.
+        if policy.replay_chain_at_baseline:
+            cfg.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+            command.upgrade(cfg, "head")
+        else:
+            _stamp_at_baseline(database_url)
+        return plan
+
+    if plan.action is MigrationAction.UPGRADE_TO_HEAD:
+        upgrade_head_and_verify(database_url)
+        return plan
+
+    if plan.action is MigrationAction.LEGACY:
+        # The narrow conversion (whose write transaction re-verifies its
+        # preconditions under the advisory lock), then the incremental
+        # upgrade to head with the full post-upgrade schema comparison.
+        if policy.wrap_conversion_errors:
+            try:
+                outcome = apply_narrow_legacy_conversion(database_url)
+            except SchemaValidationError as exc:
+                raise RuntimeError(
+                    f"Legacy conversion for revision '{plan.current_revision}' failed and was "
+                    f"rolled back: {exc} The database was not modified."
+                ) from exc
+        else:
+            outcome = apply_narrow_legacy_conversion(database_url)
+        LOG.info(
+            "Narrow legacy conversion %s for revision '%s'",
+            outcome,
+            plan.current_revision,
+        )
+        upgrade_head_and_verify(database_url)
+        return plan
+
+    # Every classification is handled above or refused in the check phase;
+    # reaching here means a new action was added without a dispatch branch.
+    raise AssertionError(f"no write dispatch for migration action {plan.action!r}")
+
+
 def run_migration(
     database_url: str | None = None,
     *,
     dry_run: bool = False,
 ) -> None:
-    """Perform offline schema verification and upgrade to head.
+    """Offline entry: verify and upgrade to head through the shared executor.
 
-    Both migration entries converge on the Alembic chain as the single source
-    of truth: a database behind head (or a supported narrow legacy database)
-    is upgraded to head and then fully compared against the ORM.
+    The offline policy refuses an empty database (startup initializes it)
+    and never wraps conversion errors; ``dry_run`` stops after the check
+    phase, performing zero writes. Both migration entries converge on the
+    Alembic chain as the single source of truth: a database behind head (or
+    a supported narrow legacy database) is upgraded to head and then fully
+    compared against the ORM.
     """
     import os
 
@@ -1166,68 +1368,10 @@ def run_migration(
     safe_url = make_url(raw_url).render_as_string(hide_password=True)
     LOG.info("Connecting to database at %s", safe_url)
 
-    context = revision_context()
-    with read_only_connection(raw_url) as conn:
-        plan = plan_migration(read_database_state(conn), context=context)
-        LOG.info(
-            "Migration classification: %s (alembic_version %s)",
-            plan.action.value,
-            plan.current_revision,
-        )
-
-        if plan.action in (
-            MigrationAction.MULTIPLE_VERSIONS,
-            MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
-            MigrationAction.UNKNOWN_REVISION,
-            MigrationAction.NEWER_THAN_CODE,
-            MigrationAction.LEGACY_UNSUPPORTED,
-            MigrationAction.EMPTY_DATABASE,
-        ):
-            raise SchemaValidationError(plan.message)
-
-        is_legacy = plan.action == MigrationAction.LEGACY
-        needs_upgrade = plan.action in (
-            MigrationAction.UPGRADE_TO_HEAD,
-            MigrationAction.LEGACY,
-        )
-        errors = verify_for_plan(conn, plan)
-
-        if errors:
-            detail = "\n  - ".join(errors)
-            if is_legacy:
-                raise SchemaValidationError(
-                    "Automatic upgrade of this legacy database to the unified baseline is "
-                    "not supported: its schema is missing tables or columns that the offline "
-                    "tool cannot reconstruct (the alembic versions tree ships only the unified "
-                    "baseline, so incremental migrations cannot be replayed). Restore the "
-                    "pre-upgrade sealed backup into a fresh deployment instead.\n  - " + detail
-                )
-            raise SchemaValidationError(
-                "Database schema verification failed for unified baseline:\n  - " + detail
-            )
-
-        LOG.info("Database schema verification passed. All tables and columns present.")
-
-        stamp_unified_baseline(conn, dry_run=True)
-
-        if dry_run:
-            LOG.info("Dry-run complete: no writes were performed.")
-            return
-
-    if needs_upgrade:
-        if is_legacy:
-            LOG.info(
-                "Detected supported legacy revision '%s'. Rebuilding folder_patrol_status "
-                "from sync_checkpoints before upgrading to head.",
-                plan.current_revision,
-            )
-            apply_narrow_legacy_conversion(raw_url)
-        upgrade_head_and_verify(raw_url)
-        return
-
-    engine = create_engine(check_connect_url(raw_url))
-    try:
-        with engine.begin() as conn:
-            stamp_unified_baseline(conn, dry_run=False)
-    finally:
-        engine.dispose()
+    execute_migration(
+        raw_url,
+        mode=MigrationMode.DRY_RUN if dry_run else MigrationMode.WRITE,
+        policy=OFFLINE_POLICY,
+    )
+    if dry_run:
+        LOG.info("Dry-run complete: no writes were performed.")

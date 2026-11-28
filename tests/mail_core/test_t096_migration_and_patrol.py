@@ -105,13 +105,16 @@ def test_ac001_migration_0008_backfills_last_delta_settled_at_from_updated_at():
                 ),
                 {"id": acc_id},
             )
-            for fid, rid, name in ((f1, "INBOX", "Inbox"), (f2, "Sent", "Sent")):
+            for fid, rid, name, role in (
+                (f1, "INBOX", "Inbox", "inbox"),
+                (f2, "Sent", "Sent", "sent"),
+            ):
                 conn.execute(
                     text(
                         "INSERT INTO folders (id, account_id, remote_id, name, role, kind, selectable, remote_state) "
-                        "VALUES (:id, :aid, :rid, :name, 'inbox', 'container', true, 'active')"
+                        "VALUES (:id, :aid, :rid, :name, :role, 'container', true, 'active')"
                     ),
-                    {"id": fid, "aid": acc_id, "rid": rid, "name": name},
+                    {"id": fid, "aid": acc_id, "rid": rid, "name": name, "role": role},
                 )
             conn.execute(
                 text(

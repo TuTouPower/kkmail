@@ -49,6 +49,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 附件与垃圾回收：严格追踪 `MessageBlobLink` 与 `Attachment.blob_id` 双重引用，Fail-Closed 二次校验防误删。
     - 私有数据权限与备份边界 (t075)：API / Worker / 备份 / 恢复统一使用容器镜像的应用 UID；blob 文件固定 `0600`、私有目录固定 `0700`，不依赖进程 umask。备份容器只读挂载 blob 卷，在容器私有目录生成并校验密封包；部署脚本由宿主通过 Docker CLI/API 导出到宿主所有的 `0700` staging，重新规范归属/权限并校验后才原子发布。恢复以目标应用 UID 显式创建私有目录与文件，不继承归档 UID 或 umask；存量权限只经显式维护命令归一化，不由应用启动路径递归修补。
     - MIME 解析错误传递链路：Worker 归档期解析正文、报头或附件文件名失败时，保存 raw MIME 至 BlobStore 确保可恢复性，并持久记录脱敏 `MessageBody.parse_error`；详情 API (`/api/mail/messages/{id}`) 完整返回该字段；前端 `mailCoreToMailDetail` 转换透传至 `MailDetail.parse_error`，`MessageReader` 以可访问 alert 横幅明确提示解析失败及原因，即使存在摘要或部分内容亦不被静默吞掉或伪报为空正文。
+    - 数据库迁移执行边界 (t099)：全部迁移入口（CLI 启动、`--migrate-only`、`--check-migrations` 与离线工具 `scripts/migrate_to_unified_baseline.py`）共用 `mail_core.db.baseline.execute_migration` 单一执行器，入口侧只余 URL 解析与策略/模式选择。执行器统一管理三段：只读检查（经 `read_only_connection` 只读连接管理器读取状态、由共享规划器 `plan_migration` 分类、按 `verify_for_plan` 校验，产出的 `MigrationPlan` 是独立于连接的纯值）→ 释放只读连接（引擎销毁后检查事务与物理连接必然结束，任何写连接都在其后才打开，检查锁与写锁不可能重叠）→ 写计划显式分派（空库重放全链初始化、AT_BASELINE 按入口策略收敛、UPGRADE_TO_HEAD 与 LEGACY 经 `upgrade_head_and_verify`、LEGACY 先走窄转换）。入口差异只经 `MigrationPolicy` 表达：空库策略（启动初始化、离线拒绝）、LEGACY 校验失败的入口措辞、转换错误是否重包装、AT_BASELINE 写动作（启动重放链、离线盖印）。窄转换继续在单一写事务内持 advisory lock 从零重验前置条件（不复用检查结果，关闭 TOCTOU 窗口），失败整事务回滚。
 
 ## 桌面主进程与安全复制边界
 

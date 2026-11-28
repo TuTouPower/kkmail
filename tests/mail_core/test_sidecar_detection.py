@@ -120,8 +120,6 @@ def test_main_sidecar_branch_for_every_truthy_value(monkeypatch, capsys, value):
 
 
 def test_run_migrations_refuses_multiple_alembic_version_rows(monkeypatch):
-    import sqlalchemy
-
     class FakeResult:
         def scalars(self):
             return self
@@ -132,6 +130,9 @@ def test_run_migrations_refuses_multiple_alembic_version_rows(monkeypatch):
     class FakeConn:
         def execute(self, statement):
             return FakeResult()
+
+        def rollback(self):
+            pass
 
         def __enter__(self):
             return self
@@ -146,7 +147,14 @@ def test_run_migrations_refuses_multiple_alembic_version_rows(monkeypatch):
         def dispose(self):
             pass
 
-    monkeypatch.setattr(sqlalchemy, "create_engine", lambda url: FakeEngine())
+    # t099 follow-up: the startup entry delegates to the shared executor in
+    # baseline, whose read-only check connection is built by
+    # baseline.read_only_connection — so the engine fake must patch the
+    # reference that function actually uses (mail_core.db.baseline.create_engine),
+    # and FakeConn grows the rollback() the read-only manager always calls.
+    monkeypatch.setattr(
+        "mail_core.db.baseline.create_engine", lambda url: FakeEngine()
+    )
     # A2 follow-up: state reading moved into baseline.read_database_state, so
     # the inspector fake must patch the reference that function actually
     # uses (mail_core.db.baseline.inspect), not sqlalchemy.inspect.
