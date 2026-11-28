@@ -18,6 +18,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import Text, cast, func, literal, text, update
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import (
@@ -89,6 +91,30 @@ def _failure_streak(cfg: dict[str, Any], now: datetime) -> list[datetime]:
 def mark_credential_invalid(session: Session, account_id: uuid.UUID) -> Account | None:
     """A confirmed authentication rejection: invalidate credential and stop sync."""
 
+    now_iso = _now().isoformat()
+    if hasattr(session, "execute") and hasattr(session, "get_bind"):
+        bind = session.get_bind()
+        if bind is not None and getattr(bind.dialect, "name", None) == "postgresql":
+            session.flush()
+            stmt = (
+                update(Account)
+                .where(Account.id == account_id)
+                .values(
+                    credential_state=CredentialState.INVALID.value,
+                    sync_enabled=False,
+                    sync_activity=SyncActivity.IDLE.value,
+                    config=func.jsonb_set(
+                        func.coalesce(Account.config, text("'{}'::jsonb")),
+                        literal([CFG_LAST_SYNCED_AT], ARRAY(Text)),
+                        func.to_jsonb(cast(now_iso, Text)),
+                        True,
+                    ),
+                )
+                .returning(Account)
+                .execution_options(populate_existing=True)
+            )
+            return session.scalar(stmt)
+
     acc = session.get(Account, account_id)
     if acc is None:
         return None
@@ -96,7 +122,7 @@ def mark_credential_invalid(session: Session, account_id: uuid.UUID) -> Account 
     acc.sync_enabled = False
     acc.sync_activity = SyncActivity.IDLE.value
     cfg = _config(acc)
-    cfg[CFG_LAST_SYNCED_AT] = _now().isoformat()
+    cfg[CFG_LAST_SYNCED_AT] = now_iso
     acc.config = cfg
     session.flush()
     return acc
