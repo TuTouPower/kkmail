@@ -54,6 +54,8 @@ def _advance_delta_watermark_on_settle(
     if getattr(job, "account_id", None) is None:
         return
     payload = getattr(job, "payload", None) or {}
+    if not isinstance(payload, dict):
+        return
     folder_raw = payload.get("folder_id")
     if not folder_raw:
         return
@@ -71,13 +73,18 @@ def _advance_delta_watermark_on_settle(
         return
     from mail_core.sync.checkpoints import advance_delta_settlement_watermark
 
-    # t094: capture the execution's fencing token from the delta result when
-    # present; the monotonic token comparison in the watermark helper rejects
-    # a superseded execution that commits late.
+    # t094: capture the execution's fencing token from the delta result or
+    # persisted job payload; the monotonic token comparison in the watermark
+    # helper rejects a superseded execution that settles late.
+    raw_token = None
+    if isinstance(result, dict) and result.get("fencing_token") is not None:
+        raw_token = result["fencing_token"]
+    elif payload.get("_fencing_token") is not None:
+        raw_token = payload["_fencing_token"]
     fencing_token = None
-    if result is not None and result.get("fencing_token") is not None:
+    if raw_token is not None and not isinstance(raw_token, bool):
         try:
-            fencing_token = int(result["fencing_token"])
+            fencing_token = int(raw_token)
         except (ValueError, TypeError):
             fencing_token = None
     advance_delta_settlement_watermark(
@@ -87,6 +94,15 @@ def _advance_delta_watermark_on_settle(
         settled_at=now,
         fencing_token=fencing_token,
     )
+
+
+def _strip_fencing_token(job: WorkerJob) -> None:
+    """Clear any per-attempt fencing token when returning a job to PENDING."""
+    payload = getattr(job, "payload", None)
+    if isinstance(payload, dict) and "_fencing_token" in payload:
+        cleaned = dict(payload)
+        cleaned.pop("_fencing_token", None)
+        job.payload = cleaned
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
@@ -622,6 +638,7 @@ def reschedule_job(
     job.run_after = now + timedelta(seconds=delay)
     job.locked_by = None
     job.locked_at = None
+    _strip_fencing_token(job)
     session.flush()
     from mail_core.sync.execution import refresh_requests, settle_job_links
 
@@ -706,6 +723,7 @@ def fail_job(
         if isinstance(getattr(job, "payload", None), dict):
             stamped = dict(job.payload or {})
             stamped["_backoff_until"] = job.run_after.isoformat()
+            stamped.pop("_fencing_token", None)
             job.payload = stamped
         session.flush()
         # Retriable failure: bound targets stay open on the same generation.
@@ -782,6 +800,7 @@ def reclaim_stale_claims(
             job.last_error = (prev + suffix)[:2000]
         if failure_attempts < cap:
             job.status = JobStatus.PENDING.value
+            _strip_fencing_token(job)
             requeued.append(job)
         else:
             job.status = JobStatus.FAILED.value

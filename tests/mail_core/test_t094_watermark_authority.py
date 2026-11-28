@@ -1213,3 +1213,666 @@ def test_ac007_steady_state_drain_80k_jobs_and_86k_outbox_preserves_fresh():
         assert expired_outbox_left == 0
         assert total_outbox_left == fresh_outbox_n + unpublished_outbox_n
         assert pruned_through_seq(session) == base_seq + expired_outbox_n - 1
+
+
+def test_ac002_watermark_dual_tx_race_with_stale_orm_cannot_regress():
+    """Finding 2: concurrent dual-TX race with stale ORM snapshot cannot regress
+    watermark or fencing_token, and expires cached SyncCheckpoint in caller's session.
+    Also verifies fencing_token=0 vs None semantics.
+    """
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    t_base = datetime(2026, 11, 28, 1, 0, tzinfo=timezone.utc)
+    t_newer = t_base + timedelta(minutes=1)
+    t_later = t_base + timedelta(minutes=2)
+
+    with Session() as session:
+        acc, folder = _seed_account_with_inbox(session, prefix="race")
+        session.add(
+            SyncCheckpoint(
+                account_id=acc.id,
+                folder_id=folder.id,
+                full_scan_complete=True,
+                fencing_token=1,
+            )
+        )
+        session.commit()
+        key = {"account_id": acc.id, "folder_id": folder.id}
+
+    with Session() as stale, Session() as current:
+        cached = stale.get(SyncCheckpoint, key)
+        assert cached is not None
+        assert cached.fencing_token == 1
+
+        new_cp = current.get(SyncCheckpoint, key)
+        assert new_cp is not None
+        new_cp.fencing_token = 2
+        assert advance_delta_settlement_watermark(
+            current, **key, fencing_token=2, settled_at=t_newer
+        ) is True
+        current.commit()
+
+        # Stale session still sees cached fencing_token=1 until SQL UPDATE runs,
+        # but the atomic conditional UPDATE must reject both older and newer times.
+        assert cached.fencing_token == 1
+        assert (
+            advance_delta_settlement_watermark(
+                stale, **key, fencing_token=1, settled_at=t_base
+            )
+            is False
+        )
+        assert (
+            advance_delta_settlement_watermark(
+                stale, **key, fencing_token=1, settled_at=t_later
+            )
+            is False
+        )
+        # Cached ORM instance must be expired so callers read fresh DB state.
+        assert cached.fencing_token == 2
+        assert cached.last_delta_settled_at == t_newer
+        stale.commit()
+
+    # Check fencing_token=0 vs None semantics on a fresh checkpoint (default token=0).
+    with Session() as session:
+        acc0, folder0 = _seed_account_with_inbox(session, prefix="tok0")
+        session.add(
+            SyncCheckpoint(
+                account_id=acc0.id,
+                folder_id=folder0.id,
+                full_scan_complete=True,
+                fencing_token=0,
+            )
+        )
+        session.commit()
+        k0 = {"account_id": acc0.id, "folder_id": folder0.id}
+
+    with Session() as session:
+        # token=0 matches checkpoint fencing_token=0
+        assert (
+            advance_delta_settlement_watermark(
+                session, **k0, fencing_token=0, settled_at=t_base
+            )
+            is True
+        )
+        # Bump checkpoint token to 1; token=0 must now be rejected, while None skips token check.
+        cp0 = session.get(SyncCheckpoint, k0)
+        cp0.fencing_token = 1
+        session.commit()
+
+        assert (
+            advance_delta_settlement_watermark(
+                session, **k0, fencing_token=0, settled_at=t_newer
+            )
+            is False
+        )
+        assert (
+            advance_delta_settlement_watermark(
+                session, **k0, fencing_token=None, settled_at=t_newer
+            )
+            is True
+        )
+        session.commit()
+
+
+def test_ac002_fail_reclaim_provider_error_carry_fencing_token_and_cannot_regress(
+    monkeypatch,
+):
+    """Finding 2: provider_error, fail_job, and reclaim_stale_claims propagate true
+    fencing_token so stale executions cannot regress a newer watermark.
+    """
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage.models import AccountSyncLease
+    from mail_core.sync import delta as delta_mod
+    from mail_core.sync.jobs import claim_jobs, enqueue_job, reclaim_stale_claims
+    from mail_core.sync.leases import acquire_lease
+    from mail_core.worker.handlers import handle_job
+
+    Session = get_session_factory()
+    t_old = datetime(2026, 11, 28, 1, 0, tzinfo=timezone.utc)
+    t_newer = datetime(2026, 11, 28, 1, 1, tzinfo=timezone.utc)
+
+    # Part A: provider_error via handle_job on terminal attempt propagates true token
+    with Session() as session:
+        acc_a, folder_a = _seed_account_with_inbox(session, prefix="prov-err")
+        session.add(
+            SyncCheckpoint(
+                account_id=acc_a.id,
+                folder_id=folder_a.id,
+                full_scan_complete=True,
+                fencing_token=0,
+                last_delta_settled_at=t_old,
+            )
+        )
+        job_a = enqueue_job(
+            session,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND,
+            account_id=acc_a.id,
+            payload={"folder_id": str(folder_a.id)},
+            dedupe_key=f"delta:{acc_a.id}:{folder_a.id}",
+        )
+        job_a.failure_attempts = 7
+        session.commit()
+        acc_a_id, folder_a_id, job_a_id = acc_a.id, folder_a.id, job_a.id
+
+    with Session() as session:
+        claimed = claim_jobs(session, worker_id="w-prov", limit=1, account_id=acc_a_id)
+        assert [j.id for j in claimed] == [job_a_id]
+        session.commit()
+
+    # Provider stalls on token=1 while a concurrent token=2 finishes with t_newer,
+    # then provider raises -> terminal provider_error must NOT regress t_newer!
+    class _StallThenFailProvider:
+        def delta_changes(self, _rid, _cur):
+            with Session() as s2:
+                lease_row = s2.get(AccountSyncLease, acc_a_id)
+                assert lease_row is not None
+                assert lease_row.fencing_token == 1
+                lease_row.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+                s2.commit()
+            with Session() as s2:
+                l2 = acquire_lease(s2, account_id=acc_a_id, owner_id="w-winner", ttl=timedelta(minutes=5))
+                cp2 = s2.get(SyncCheckpoint, {"account_id": acc_a_id, "folder_id": folder_a_id})
+                cp2.fencing_token = l2.fencing_token
+                assert advance_delta_settlement_watermark(
+                    s2,
+                    account_id=acc_a_id,
+                    folder_id=folder_a_id,
+                    settled_at=t_newer,
+                    fencing_token=l2.fencing_token,
+                )
+                s2.commit()
+            raise TimeoutError("stale worker timed out")
+
+    monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: _StallThenFailProvider())
+    monkeypatch.setattr("mail_core.worker.handlers.get_credential_store", lambda: object())
+
+    with Session() as session:
+        job = session.get(WorkerJob, job_a_id)
+        assert handle_job(session, job, worker_id="w-prov") is False
+        session.commit()
+
+    with Session() as session:
+        job = session.get(WorkerJob, job_a_id)
+        cp = session.get(SyncCheckpoint, {"account_id": acc_a_id, "folder_id": folder_a_id})
+        assert job.status == JobStatus.FAILED.value
+        assert job.payload.get("_fencing_token") == 1
+        assert cp.fencing_token == 2
+        assert cp.last_delta_settled_at == t_newer
+
+    # Part B: reclaim_stale_claims reads persisted _fencing_token on crash loop
+    with Session() as session:
+        acc_b, folder_b = _seed_account_with_inbox(session, prefix="reclaim-tok")
+        session.add(
+            SyncCheckpoint(
+                account_id=acc_b.id,
+                folder_id=folder_b.id,
+                full_scan_complete=True,
+                fencing_token=5,
+                last_delta_settled_at=t_old,
+            )
+        )
+        stale_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc_b.id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND.value,
+            status=JobStatus.CLAIMED.value,
+            locked_by="w-crashed",
+            locked_at=t_newer - timedelta(hours=1),
+            failure_attempts=7,
+            payload={"folder_id": str(folder_b.id), "_fencing_token": 3},
+        )
+        session.add(stale_job)
+        session.commit()
+        acc_b_id, folder_b_id, stale_job_id = acc_b.id, folder_b.id, stale_job.id
+
+    with Session() as session:
+        # Even with a later wall-clock `now`, stale _fencing_token=3 < cp.fencing_token=5 must not advance!
+        assert (
+            reclaim_stale_claims(
+                session,
+                older_than=timedelta(minutes=5),
+                now=t_newer + timedelta(hours=1),
+                max_attempts=8,
+            )
+            >= 1
+        )
+        session.commit()
+
+    with Session() as session:
+        cp_b = session.get(SyncCheckpoint, {"account_id": acc_b_id, "folder_id": folder_b_id})
+        assert session.get(WorkerJob, stale_job_id).status == JobStatus.FAILED.value
+        assert cp_b.last_delta_settled_at == t_old
+
+    # Non-terminal reclaim clears _fencing_token before retry; terminal reclaim with current token=5 advances.
+    with Session() as session:
+        retriable_reclaim_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc_b_id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND.value,
+            status=JobStatus.CLAIMED.value,
+            locked_by="w-crashed-retry",
+            locked_at=t_newer - timedelta(hours=2),
+            failure_attempts=0,
+            payload={"folder_id": str(folder_b_id), "_fencing_token": 5},
+        )
+        session.add(retriable_reclaim_job)
+        session.commit()
+        retriable_reclaim_id = retriable_reclaim_job.id
+
+    with Session() as session:
+        assert (
+            reclaim_stale_claims(
+                session,
+                older_than=timedelta(minutes=5),
+                now=t_newer - timedelta(minutes=30),
+                max_attempts=8,
+            )
+            >= 1
+        )
+        session.commit()
+
+    with Session() as session:
+        requeued = session.get(WorkerJob, retriable_reclaim_id)
+        assert requeued.status == JobStatus.PENDING.value
+        assert "_fencing_token" not in requeued.payload
+
+    # Current _fencing_token=5 on terminal reclaim DOES advance watermark.
+    with Session() as session:
+        current_reclaim_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc_b_id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND.value,
+            status=JobStatus.CLAIMED.value,
+            locked_by="w-crashed-cur",
+            locked_at=t_newer - timedelta(hours=1),
+            failure_attempts=7,
+            payload={"folder_id": str(folder_b_id), "_fencing_token": 5},
+        )
+        session.add(current_reclaim_job)
+        session.commit()
+
+    with Session() as session:
+        assert (
+            reclaim_stale_claims(
+                session,
+                older_than=timedelta(minutes=5),
+                now=t_newer,
+                max_attempts=8,
+            )
+            >= 1
+        )
+        session.commit()
+
+    with Session() as session:
+        cp_b = session.get(SyncCheckpoint, {"account_id": acc_b_id, "folder_id": folder_b_id})
+        assert cp_b.last_delta_settled_at == t_newer
+
+    # Part C: terminal fail_job directly with stale _fencing_token cannot regress,
+    # and a terminal provider_error winner (without apply_delta_page) blocks an older token.
+    with Session() as session:
+        stale_fail_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc_b_id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND.value,
+            status=JobStatus.CLAIMED.value,
+            locked_by="w-fail-stale",
+            failure_attempts=7,
+            payload={"folder_id": str(folder_b_id), "_fencing_token": 4},
+        )
+        session.add(stale_fail_job)
+        session.commit()
+        stale_fail_id = stale_fail_job.id
+
+    with Session() as session:
+        fail_job(
+            session,
+            session.get(WorkerJob, stale_fail_id),
+            "late terminal fail",
+            worker_id="w-fail-stale",
+            max_attempts=8,
+            now=t_newer + timedelta(hours=2),
+        )
+        session.commit()
+
+    with Session() as session:
+        cp_b = session.get(SyncCheckpoint, {"account_id": acc_b_id, "folder_id": folder_b_id})
+        assert cp_b.last_delta_settled_at == t_newer
+
+    with Session() as session:
+        acc_c, folder_c = _seed_account_with_inbox(session, prefix="prov-win-fail")
+        session.add(
+            SyncCheckpoint(
+                account_id=acc_c.id,
+                folder_id=folder_c.id,
+                full_scan_complete=True,
+                fencing_token=1,
+                last_delta_settled_at=t_old,
+            )
+        )
+        win_fail_job = WorkerJob(
+            id=uuid.uuid4(),
+            account_id=acc_c.id,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            execution_origin=ExecutionOrigin.BACKGROUND.value,
+            status=JobStatus.CLAIMED.value,
+            locked_by="w-win-fail",
+            failure_attempts=7,
+            payload={"folder_id": str(folder_c.id)},
+        )
+        session.add(win_fail_job)
+        session.commit()
+        acc_c_id, folder_c_id, win_fail_id = acc_c.id, folder_c.id, win_fail_job.id
+
+    with Session() as session:
+        from mail_core.worker.handlers import _evaluate_result
+
+        win_row = session.get(WorkerJob, win_fail_id)
+        assert (
+            _evaluate_result(
+                session,
+                win_row,
+                {"status": "provider_error", "error": "boom", "fencing_token": 2},
+                "w-win-fail",
+            )
+            is False
+        )
+        session.commit()
+
+    with Session() as session:
+        cp_c = session.get(SyncCheckpoint, {"account_id": acc_c_id, "folder_id": folder_c_id})
+        assert cp_c.fencing_token == 2
+        assert cp_c.last_delta_settled_at > t_newer
+        # Stale token=1 arriving later in wall-clock time is blocked.
+        assert (
+            advance_delta_settlement_watermark(
+                session,
+                account_id=acc_c_id,
+                folder_id=folder_c_id,
+                settled_at=cp_c.last_delta_settled_at + timedelta(minutes=5),
+                fencing_token=1,
+            )
+            is False
+        )
+
+
+def test_ac002_final_exhausted_page_commits_atomically_or_rolls_back_all(monkeypatch):
+    """Finding 2: on exhausted=True via handle_job, apply_delta_page + ARCHIVE_MIME_BATCH
+    + release_lease + complete_job + record_connectivity_success + watermark commit in ONE
+    PostgreSQL transaction; a crash/exception before commit rolls all of them back.
+    """
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import ConnectivityState
+    from mail_core.mail.storage.models import Account, AccountSyncLease, Message
+    from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
+    from mail_core.sync import delta as delta_mod
+    from mail_core.sync.jobs import claim_jobs, enqueue_job
+    from mail_core.worker.handlers import handle_job
+
+    Session = get_session_factory()
+    t_old = datetime(2026, 11, 28, 1, 0, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    def _seed_case(prefix: str):
+        with Session() as session:
+            acc, folder = _seed_account_with_inbox(session, prefix=prefix)
+            acc.connectivity_state = ConnectivityState.DEGRADED.value
+            session.add(
+                SyncCheckpoint(
+                    account_id=acc.id,
+                    folder_id=folder.id,
+                    full_scan_complete=True,
+                    cursor={"modseq": 10},
+                    modseq=10,
+                    last_delta_settled_at=t_old,
+                )
+            )
+            req = SyncRequest(
+                id=uuid.uuid4(),
+                client_request_id=f"req-{prefix}-{uuid.uuid4().hex[:8]}",
+                mode="delta",
+                trigger="manual",
+                state="queued",
+                scope={},
+            )
+            session.add(req)
+            session.flush()
+            target = SyncRequestTarget(
+                id=uuid.uuid4(),
+                request_id=req.id,
+                account_id=acc.id,
+                folder_id=folder.id,
+                target_key=f"{acc.id}:{folder.id}",
+                requested_generation=uuid.uuid4(),
+                state="queued",
+            )
+            session.add(target)
+            session.flush()
+            job = enqueue_job(
+                session,
+                job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=ExecutionOrigin.FOREGROUND,
+                account_id=acc.id,
+                payload={"folder_id": str(folder.id), "request_id": str(req.id)},
+                dedupe_key=f"delta:{acc.id}:{folder.id}",
+            )
+            session.add(
+                SyncRequestTargetJob(
+                    id=uuid.uuid4(),
+                    target_id=target.id,
+                    job_id=job.id,
+                    status="queued",
+                )
+            )
+            session.commit()
+            return acc.id, folder.id, req.id, target.id, job.id
+
+    class _ExhaustedProvider:
+        def __init__(self, remote_id: str, new_modseq: int):
+            self._remote_id = remote_id
+            self._new_modseq = new_modseq
+
+        def delta_changes(self, _rid, _cur):
+            return DeltaPage(
+                changes=[
+                    DeltaChange(
+                        kind="upsert",
+                        remote_id=self._remote_id,
+                        meta=RemoteMessageMeta(
+                            remote_id=self._remote_id,
+                            subject="Atomic Test",
+                            from_address="sender@example.test",
+                            from_name="Sender",
+                            sort_time=now,
+                            is_read=False,
+                            has_attachments=False,
+                        ),
+                    )
+                ],
+                next_cursor={"modseq": self._new_modseq},
+                exhausted=True,
+            )
+
+    monkeypatch.setattr("mail_core.worker.handlers.get_credential_store", lambda: object())
+
+    # Case 1: Nothing is committed before final session.commit() — all 6 effects appear together.
+    acc1, fld1, req1, tgt1, job1 = _seed_case("atomic-ok")
+    with Session() as session:
+        claimed = claim_jobs(session, worker_id="w-atom1", limit=1, account_id=acc1)
+        assert [j.id for j in claimed] == [job1]
+        session.commit()
+
+    monkeypatch.setattr(
+        delta_mod,
+        "build_provider",
+        lambda *_a, **_k: _ExhaustedProvider("msg-atom-1", 20),
+    )
+
+    with Session() as session:
+        job = session.get(WorkerJob, job1)
+        assert handle_job(session, job, worker_id="w-atom1") is True
+
+        # Before session.commit(): second PG session must observe NONE of the final commit's effects!
+        with Session() as observer:
+            cp_obs = observer.get(SyncCheckpoint, {"account_id": acc1, "folder_id": fld1})
+            assert cp_obs.cursor == {"modseq": 10}
+            assert cp_obs.last_delta_settled_at == t_old
+            assert (
+                observer.scalar(
+                    select(Message).where(Message.account_id == acc1, Message.remote_id == "msg-atom-1")
+                )
+                is None
+            )
+            assert (
+                observer.scalar(
+                    select(WorkerJob).where(
+                        WorkerJob.account_id == acc1,
+                        WorkerJob.job_type == JobType.ARCHIVE_MIME_BATCH.value,
+                    )
+                )
+                is None
+            )
+            lease_obs = observer.get(AccountSyncLease, acc1)
+            assert lease_obs is not None and lease_obs.fencing_token == 1
+            assert observer.get(WorkerJob, job1).status == JobStatus.CLAIMED.value
+            assert observer.get(Account, acc1).connectivity_state == ConnectivityState.DEGRADED.value
+            assert observer.get(SyncRequest, req1).state == "running"
+
+        session.commit()
+
+    # After ONE commit: all effects are persisted atomically.
+    with Session() as verify:
+        cp_v = verify.get(SyncCheckpoint, {"account_id": acc1, "folder_id": fld1})
+        assert cp_v.cursor == {"modseq": 20}
+        assert cp_v.last_delta_settled_at > t_old
+        assert (
+            verify.scalar(
+                select(Message).where(Message.account_id == acc1, Message.remote_id == "msg-atom-1")
+            )
+            is not None
+        )
+        assert (
+            verify.scalar(
+                select(WorkerJob).where(
+                    WorkerJob.account_id == acc1,
+                    WorkerJob.job_type == JobType.ARCHIVE_MIME_BATCH.value,
+                )
+            )
+            is not None
+        )
+        lease_v = verify.get(AccountSyncLease, acc1)
+        assert lease_v is not None and lease_v.fencing_token == 2
+        assert verify.get(WorkerJob, job1).status == JobStatus.DONE.value
+        assert verify.get(Account, acc1).connectivity_state == ConnectivityState.CONNECTED.value
+        assert verify.get(SyncRequest, req1).state == "complete"
+        assert verify.get(SyncRequestTarget, tgt1).state == "complete"
+
+    # Case 2: Simulated crash/exception before final commit rolls back cursor, message,
+    # archive enqueue, lease release, job status, request status, and watermark together.
+    acc2, fld2, req2, tgt2, job2 = _seed_case("atomic-crash")
+    with Session() as session:
+        claimed = claim_jobs(session, worker_id="w-atom2", limit=1, account_id=acc2)
+        assert [j.id for j in claimed] == [job2]
+        session.commit()
+
+    monkeypatch.setattr(
+        delta_mod,
+        "build_provider",
+        lambda *_a, **_k: _ExhaustedProvider("msg-atom-2", 30),
+    )
+
+    with Session() as session:
+        job = session.get(WorkerJob, job2)
+        assert handle_job(session, job, worker_id="w-atom2") is True
+        # Simulate crash / commit failure before final PostgreSQL commit:
+        session.rollback()
+
+    with Session() as verify:
+        cp_c = verify.get(SyncCheckpoint, {"account_id": acc2, "folder_id": fld2})
+        assert cp_c.cursor == {"modseq": 10}
+        assert cp_c.last_delta_settled_at == t_old
+        assert (
+            verify.scalar(
+                select(Message).where(Message.account_id == acc2, Message.remote_id == "msg-atom-2")
+            )
+            is None
+        )
+        assert (
+            verify.scalar(
+                select(WorkerJob).where(
+                    WorkerJob.account_id == acc2,
+                    WorkerJob.job_type == JobType.ARCHIVE_MIME_BATCH.value,
+                )
+            )
+            is None
+        )
+        lease_c = verify.get(AccountSyncLease, acc2)
+        assert lease_c is not None and lease_c.fencing_token == 1
+        assert verify.get(WorkerJob, job2).status == JobStatus.CLAIMED.value
+        assert verify.get(Account, acc2).connectivity_state == ConnectivityState.DEGRADED.value
+        assert verify.get(SyncRequest, req2).state == "running"
+        assert verify.get(SyncRequestTarget, tgt2).state == "running"
+
+    # Case 3: Exception inside complete_job during handle_job rolls back the entire
+    # exhausted=True transaction (cursor, message, archive, lease release, watermark)
+    # and keeps the job non-DONE for retry.
+    acc3, fld3, req3, tgt3, job3 = _seed_case("atomic-exc")
+    with Session() as session:
+        claimed = claim_jobs(session, worker_id="w-atom3", limit=1, account_id=acc3)
+        assert [j.id for j in claimed] == [job3]
+        session.commit()
+
+    monkeypatch.setattr(
+        delta_mod,
+        "build_provider",
+        lambda *_a, **_k: _ExhaustedProvider("msg-atom-3", 40),
+    )
+
+    from mail_core.sync import checkpoints as checkpoints_mod
+
+    orig_advance = checkpoints_mod.advance_delta_settlement_watermark
+
+    def _boom_watermark(*_a, **_k):
+        raise RuntimeError("simulated failure during final settlement")
+
+    monkeypatch.setattr(checkpoints_mod, "advance_delta_settlement_watermark", _boom_watermark)
+    try:
+        with Session() as session:
+            job = session.get(WorkerJob, job3)
+            assert handle_job(session, job, worker_id="w-atom3") is False
+            session.commit()
+    finally:
+        monkeypatch.setattr(checkpoints_mod, "advance_delta_settlement_watermark", orig_advance)
+
+    with Session() as verify:
+        cp_e = verify.get(SyncCheckpoint, {"account_id": acc3, "folder_id": fld3})
+        assert cp_e.cursor == {"modseq": 10}
+        assert cp_e.last_delta_settled_at == t_old
+        assert (
+            verify.scalar(
+                select(Message).where(Message.account_id == acc3, Message.remote_id == "msg-atom-3")
+            )
+            is None
+        )
+        assert (
+            verify.scalar(
+                select(WorkerJob).where(
+                    WorkerJob.account_id == acc3,
+                    WorkerJob.job_type == JobType.ARCHIVE_MIME_BATCH.value,
+                )
+            )
+            is None
+        )
+        lease_e = verify.get(AccountSyncLease, acc3)
+        assert lease_e is not None and lease_e.fencing_token == 1
+        job_e = verify.get(WorkerJob, job3)
+        assert job_e.status == JobStatus.PENDING.value
+        assert job_e.failure_attempts == 1
+        assert "_fencing_token" not in job_e.payload
+        assert verify.get(SyncRequest, req3).state == "queued"
+        assert verify.get(SyncRequestTarget, tgt3).state == "queued"

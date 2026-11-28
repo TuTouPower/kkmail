@@ -220,6 +220,11 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
     # backoff, no forged ``done`` and no privately spawned successor.
     if status == "provider_error" and not result.get("followup_scheduled"):
         failure = structured_failure_from_outcome(result)
+        if result.get("fencing_token") is not None and not isinstance(result.get("fencing_token"), bool):
+            if isinstance(getattr(job, "payload", None), dict):
+                stamped = dict(job.payload or {})
+                stamped["_fencing_token"] = int(result["fencing_token"])
+                job.payload = stamped
         reschedule_job(
             session,
             job,
@@ -415,6 +420,8 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 priority=job.priority,
                 request_id=_uuid_or_none(payload.get("request_id")),
                 execution_origin=execution_origin,
+                job_id=job.id,
+                final_session=session,
             )
             log.info("sync_folder_delta %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
