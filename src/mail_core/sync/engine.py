@@ -61,6 +61,7 @@ from mail_core.sync.leases import (
     release_lease,
 )
 from mail_core.sync.metadata import apply_metadata_page
+from mail_core.sync.retention import record_message_stats_rows
 
 log = logging.getLogger("mail_core.sync.engine")
 
@@ -610,6 +611,7 @@ def sync_folder_metadata(
                 except FencingMismatch:
                     session.rollback()
                     return {"status": "fencing_mismatch", "upserted": total}
+                record_message_stats_rows(session, result.upserted)
                 session.commit()
                 total += result.upserted
                 cursor = result.cursor

@@ -14,7 +14,10 @@ from mail_core.worker.main import schedule_periodic_inbox_sync
 from mail_core.sync.retention import (
     COMPLETED_JOB_PRUNE_BATCH,
     COMPLETED_JOB_RETENTION,
+    MESSAGE_STATS_ANALYZE_COOLDOWN_SECONDS,
     MESSAGE_STATS_BULK_CHANGED_ROWS,
+    MESSAGE_STATS_MIN_INTERVAL_S,
+    MESSAGE_STATS_TABLES,
     PUBLISHED_OUTBOX_PRUNE_BATCH,
     PUBLISHED_OUTBOX_RETENTION,
     is_bulk_message_sync,
@@ -63,6 +66,9 @@ def test_stats_refresh_only_for_bulk_deletes_on_declared_tables():
 
 def test_message_stats_contract_constants_consumed():
     """AC-006: bulk threshold and relative-error bound are declared and used."""
+    assert MESSAGE_STATS_TABLES == ("message_search", "messages", "message_bodies")
+    assert MESSAGE_STATS_ANALYZE_COOLDOWN_SECONDS == 300.0
+    assert MESSAGE_STATS_MIN_INTERVAL_S == MESSAGE_STATS_ANALYZE_COOLDOWN_SECONDS
     assert is_bulk_message_sync(MESSAGE_STATS_BULK_CHANGED_ROWS) is True
     assert is_bulk_message_sync(MESSAGE_STATS_BULK_CHANGED_ROWS - 1) is False
     # Real row-count comparison: each table judged against its own count; a
