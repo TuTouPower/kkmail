@@ -35,7 +35,8 @@ from mail_core.mail.storage.models import (
 )
 from mail_core.providers.base import DeltaPage
 from mail_core.sync.context import sync_request_payload
-from mail_core.sync.idle_watcher import IdleWatcherConfig, IdleWatcherManager
+from mail_core.sync.idle_policy import IdleWatcherConfig
+from mail_core.sync.idle_watcher import IdleWatcherManager
 from mail_core.sync.jobs import claim_jobs, complete_job, enqueue_job
 from mail_core.worker.handlers import handle_job
 

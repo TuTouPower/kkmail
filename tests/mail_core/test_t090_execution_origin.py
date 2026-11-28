@@ -46,7 +46,8 @@ from mail_core.providers.base import (
     RemoteOperationResult,
 )
 from mail_core.providers.http import CursorInvalidError, PermanentAuthError, RateLimitedError
-from mail_core.sync.idle_watcher import IdleWatcherManager, _Watch
+from mail_core.sync.idle_policy import IdleWatcherConfig
+from mail_core.sync.idle_watcher import IdleWatchSession, IdleWatcherManager
 from mail_core.sync.jobs import claim_jobs, complete_job, enqueue_job
 from mail_core.sync.leases import acquire_lease
 from mail_core.sync.patrol import PatrolConfig, schedule_folder_status_patrol
@@ -241,16 +242,24 @@ def test_t090_periodic_patrol_and_idle_background_isolation(monkeypatch):
         assert "background" not in (patrol_job.payload or {})
         poll_jid, patrol_jid = poll_job.id, patrol_job.id
 
-    # 3. IdleWatcher catch-up enqueue
+    # 3. IdleWatcher catch-up enqueue (t100: the per-account session
+    # owns the enqueue; it used to hang off the manager via _Watch).
     manager = IdleWatcherManager(Session)
-    watch = _Watch(
+    watch = IdleWatchSession(
         account_id=aid3,
         folder_id=inbox3,
         fingerprint="fp",
         account_snapshot=Account(id=aid3, email="idle@example.test", provider="imap", config={}),
-        folder_remote_id="INBOX",
+        folder_snapshot=Folder(
+            id=inbox3, account_id=aid3, remote_id="INBOX", name="Inbox",
+            role="inbox", remote_state=FolderRemoteState.ACTIVE.value,
+        ),
+        session_factory=Session,
+        idle_session_factory=lambda account, folder_row: None,
+        config=IdleWatcherConfig(),
+        host=manager,
     )
-    manager._enqueue_delta(watch)
+    watch._enqueue_delta()  # noqa: SLF001 - test seam
     with Session() as session:
         idle_job = session.scalar(select(WorkerJob).where(WorkerJob.dedupe_key == f"delta:{aid3}:{inbox3}"))
         assert idle_job is not None

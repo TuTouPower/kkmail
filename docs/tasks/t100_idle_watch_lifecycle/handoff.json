@@ -1,0 +1,18 @@
+{
+  "tid": "t100",
+  "attempt": 1,
+  "execution_id": "a7f1add6a61e4084a044db04ffe0e8aa",
+  "status": "done",
+  "branch": "t100_idle_watch_lifecycle",
+  "base_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "spec_source_sha": "7746212f8d96870d0b7e75fd1868c159993d1a27",
+  "tests": "unit 模式全量 1767 passed / 646 skipped（PG 门控）/ 2 failed（基线同复现的环境假象）；t100 新增 6 用例、t061 可跑 15 用例、t095 idle 6 用例全过；模板契约 387 passed / 2 failed（基线同复现）；PG 全量门禁未在云端执行（无 Docker），见 p106",
+  "blackbox": "不适用——本 task 只动后端 IDLE 运行时与测试接缝，前端与 Compose 未改，blackbox_verify（前端 stubApi E2E）无受影响面",
+  "review": "Round 1 独立复审 review_code / review_test 均 PASS，AC-001..AC-004 全部 TICK-VALID，minor finding 1 条遗留 p110",
+  "review_scope": "594a478cb0ae23d2",
+  "pending": [
+    "p106",
+    "p110"
+  ],
+  "findings": []
+}

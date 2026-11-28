@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from mail_core import liveness, runtime_budget
 from mail_core.config.loader import load_config
 from mail_core.readiness import read_worker_active_via_core
-from mail_core.sync.idle_watcher import IdleWatcherConfig
+from mail_core.sync.idle_policy import IdleWatcherConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

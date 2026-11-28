@@ -20,6 +20,15 @@ t076: 文件中所有 "账号不该被误标为 failed" 的断言
 (``sync_status != "failed"``) 整体重写为 ``credential_state == "valid"``：
 旧 Account.sync_status 单列已移除，"不该被误标" 的意图由 credential
 维度保留；Folder 级 sync_status 一律保留不动。
+
+t100: 席位策略（IdleCandidate / select_idle_holders / backoff_delay /
+IdleWatcherConfig）迁入无 I/O 的 ``idle_policy`` 模块；单账号会话
+``IdleWatchSession`` 成为连接、续订、重连、通知与有界补偿的唯一所有者，
+管理器只保留席位分配、关闭中资源与状态发布。原先挂在管理器上的
+``_Watch`` / ``_register_blocked`` / ``_set_state`` / ``_enqueue_delta``
+白盒接缝随所有权迁移整体替换为会话级接缝（类级 patch
+``IdleWatchSession._enqueue_delta`` 与 host 回调
+``session_blocked`` / ``session_state_changed``），断言语义不变。
 """
 
 from __future__ import annotations
@@ -43,13 +52,13 @@ from mail_core.mail.storage.models import (
     WorkerJob,
 )
 from mail_core.providers.base import IdleNotSupportedError
-from mail_core.sync.idle_watcher import (
+from mail_core.sync.idle_policy import (
     IdleCandidate,
     IdleWatcherConfig,
-    IdleWatcherManager,
     backoff_delay,
     select_idle_holders,
 )
+from mail_core.sync.idle_watcher import IdleWatchSession, IdleWatcherManager
 
 NOW = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -628,9 +637,13 @@ def test_blocked_watch_deregisters_and_retries_after_expiry():
 def test_register_blocked_stale_thread_cannot_clobber_new_watch():
     """Code review Round 3 f004: a stale watch thread (replaced while
     stuck in connect) exiting via the blocked path must not overwrite
-    the newer watch's state or block record."""
-    from mail_core.sync.idle_watcher import _Watch
+    the newer watch's state or block record.
 
+    t100: the guard now lives on the manager's host callbacks
+    (``session_blocked`` / ``session_state_changed``), keyed by
+    session-instance identity; the scenario and assertions are the
+    ones from the _Watch era, re-driven through the session API.
+    """
     acc_id, folder_id = uuid.uuid4(), uuid.uuid4()
     account = Account(
         id=acc_id, email="stale@example.com", provider="imap",
@@ -645,29 +658,37 @@ def test_register_blocked_stale_thread_cannot_clobber_new_watch():
         idle_session_factory=lambda a, f: _FakeSession(),
         config=IdleWatcherConfig(enabled=True),
     )
-    fresh = _Watch(
-        account_id=acc_id, folder_id=folder_id, fingerprint="fp-new",
-        account_snapshot=account, folder_remote_id="INBOX",
-    )
-    stale = _Watch(
-        account_id=acc_id, folder_id=folder_id, fingerprint="fp-old",
-        account_snapshot=account, folder_remote_id="INBOX",
-    )
-    manager._watches[acc_id] = fresh  # noqa: SLF001 - white-box seam
+
+    def _session(fingerprint: str) -> IdleWatchSession:
+        return IdleWatchSession(
+            account_id=acc_id,
+            folder_id=folder_id,
+            fingerprint=fingerprint,
+            account_snapshot=account,
+            folder_snapshot=folder,
+            session_factory=lambda: _FakeDbSession(account, folder),
+            idle_session_factory=lambda a, f: _FakeSession(),
+            config=IdleWatcherConfig(enabled=True),
+            host=manager,
+        )
+
+    fresh = _session("fp-new")
+    stale = _session("fp-old")
+    manager._sessions[acc_id] = fresh  # noqa: SLF001 - white-box seam
     manager._states[acc_id] = "idling"  # noqa: SLF001
-    manager._register_blocked(stale)  # noqa: SLF001
-    assert manager._watches[acc_id] is fresh  # noqa: SLF001
+    manager.session_blocked(stale)  # noqa: SLF001
+    assert manager._sessions[acc_id] is fresh  # noqa: SLF001
     assert manager._states[acc_id] == "idling"  # noqa: SLF001
     assert acc_id not in manager._blocked  # noqa: SLF001
-    # f006: the generic _set_state path carries the same identity guard.
-    manager._set_state(stale, "backoff")  # noqa: SLF001
+    # f006: the generic state-commit path carries the same identity guard.
+    manager.session_state_changed(stale, "backoff")  # noqa: SLF001
     assert manager._states[acc_id] == "idling"  # noqa: SLF001
-    manager._set_state(fresh, "changed")  # noqa: SLF001
+    manager.session_state_changed(fresh, "changed")  # noqa: SLF001
     assert manager._states[acc_id] == "changed"  # noqa: SLF001
-    manager._set_state(fresh, "idling")  # noqa: SLF001
-    # The current watch blocking itself still registers + deregisters.
-    manager._register_blocked(fresh)  # noqa: SLF001
-    assert acc_id not in manager._watches  # noqa: SLF001
+    manager.session_state_changed(fresh, "idling")  # noqa: SLF001
+    # The current session blocking itself still registers + deregisters.
+    manager.session_blocked(fresh)  # noqa: SLF001
+    assert acc_id not in manager._sessions  # noqa: SLF001
     assert manager._states[acc_id] == "fallback"  # noqa: SLF001
     assert manager._blocked[acc_id][0] == "fp-new"  # noqa: SLF001
 
@@ -699,31 +720,40 @@ def test_reconcile_sweeps_blocked_state_for_departed_accounts():
 
 def test_stop_tolerates_registered_but_unstarted_watch():
     """Round 2 code finding f003: stop() must not join a watch whose
-    thread was registered but not started yet."""
-    from mail_core.sync.idle_watcher import _Watch
+    thread was registered but not started yet.
 
+    t100: re-driven with an IdleWatchSession registered by hand.
+    """
     acc_id, folder_id = uuid.uuid4(), uuid.uuid4()
     account = Account(
         id=acc_id, email="unstarted@example.com", provider="imap",
         credential_ref="ref", config={},
+    )
+    folder = Folder(
+        id=folder_id, account_id=acc_id, remote_id="INBOX", name="Inbox",
+        role="inbox", remote_state=FolderRemoteState.ACTIVE.value,
     )
     manager = IdleWatcherManager(
         lambda: None,
         idle_session_factory=lambda a, f: _FakeSession(),
         config=IdleWatcherConfig(enabled=True),
     )
-    watch = _Watch(
+    watch = IdleWatchSession(
         account_id=acc_id,
         folder_id=folder_id,
         fingerprint="fp",
         account_snapshot=account,
-        folder_remote_id="INBOX",
+        folder_snapshot=folder,
+        session_factory=lambda: None,
+        idle_session_factory=lambda a, f: _FakeSession(),
+        config=IdleWatcherConfig(enabled=True),
+        host=manager,
     )
     watch.thread = threading.Thread(target=lambda: None)
-    manager._watches[acc_id] = watch  # noqa: SLF001 - white-box seam
+    manager._sessions[acc_id] = watch  # noqa: SLF001 - white-box seam
     manager._states[acc_id] = "connecting"  # noqa: SLF001
     manager.stop()  # must not raise RuntimeError for the unstarted thread
-    assert manager._watches == {}  # noqa: SLF001
+    assert manager._sessions == {}  # noqa: SLF001
     assert manager.held_account_ids() == set()
 
 
@@ -1018,9 +1048,12 @@ def test_ac004_no_idle_capability_skips_catchup_and_keeps_polling(block_kind):
 
 
 @db_only
-def test_t073_ac001_catchup_retries_transient_enqueue_failure():
+def test_t073_ac001_catchup_retries_transient_enqueue_failure(monkeypatch):
     """t073 AC-001: a transient enqueue failure is retried and the
-    account keeps its held/idling seat without a new IDLE event."""
+    account keeps its held/idling seat without a new IDLE event.
+
+    t100: the enqueue seam moved with ownership to the session class.
+    """
     from mail_core.db.session import get_session_factory
     from mail_core.sync.idle_watcher import _CATCHUP_RETRY_ATTEMPTS
 
@@ -1032,16 +1065,16 @@ def test_t073_ac001_catchup_retries_transient_enqueue_failure():
         session.commit()
 
     manager = _manager(Session, lambda account, folder_row: _FakeSession())
-    real_enqueue = manager._enqueue_delta  # noqa: SLF001 - test seam
+    real_enqueue = IdleWatchSession._enqueue_delta  # noqa: SLF001 - test seam
     calls: list[int] = []
 
-    def flaky_enqueue(watch):  # noqa: ANN001
+    def flaky_enqueue(session):  # noqa: ANN001
         calls.append(1)
         if len(calls) < _CATCHUP_RETRY_ATTEMPTS:
             raise RuntimeError("transient database failure")
-        return real_enqueue(watch)
+        return real_enqueue(session)
 
-    manager._enqueue_delta = flaky_enqueue  # noqa: SLF001
+    monkeypatch.setattr(IdleWatchSession, "_enqueue_delta", flaky_enqueue)
     manager.start()
     try:
         assert _wait_until(
@@ -1057,9 +1090,12 @@ def test_t073_ac001_catchup_retries_transient_enqueue_failure():
 
 
 @db_only
-def test_t073_ac002_persistent_catchup_failure_releases_seat_for_polling():
+def test_t073_ac002_persistent_catchup_failure_releases_seat_for_polling(monkeypatch):
     """t073 AC-002: exhausting the retry budget closes the session,
-    releases the held seat, and leaves t057 polling able to cover."""
+    releases the held seat, and leaves t057 polling able to cover.
+
+    t100: the enqueue seam moved with ownership to the session class.
+    """
     from mail_core.db.session import get_session_factory
     from mail_core.sync.idle_watcher import _CATCHUP_RETRY_ATTEMPTS
     from mail_core.worker.main import schedule_periodic_inbox_sync
@@ -1080,11 +1116,11 @@ def test_t073_ac002_persistent_catchup_failure_releases_seat_for_polling():
 
     manager = _manager(Session, factory, backoff_base_s=5.0, backoff_max_s=5.0)
 
-    def always_fail(watch):  # noqa: ANN001
+    def always_fail(session):  # noqa: ANN001
         calls.append(1)
         raise RuntimeError("persistent database failure")
 
-    manager._enqueue_delta = always_fail  # noqa: SLF001
+    monkeypatch.setattr(IdleWatchSession, "_enqueue_delta", always_fail)
     manager.start()
     try:
         assert _wait_until(
@@ -1108,9 +1144,12 @@ def test_t073_ac002_persistent_catchup_failure_releases_seat_for_polling():
 
 
 @db_only
-def test_t073_ac003_stop_during_catchup_retry_returns_promptly():
+def test_t073_ac003_stop_during_catchup_retry_returns_promptly(monkeypatch):
     """t073 AC-003: a per-watch stop during retry backoff ends the
-    retries, returns promptly, and leaves another watch unaffected."""
+    retries, returns promptly, and leaves another watch unaffected.
+
+    t100: the enqueue seam moved with ownership to the session class.
+    """
     from mail_core.db.session import get_session_factory
 
     Session = get_session_factory()
@@ -1128,23 +1167,23 @@ def test_t073_ac003_stop_during_catchup_retry_returns_promptly():
         return fake
 
     manager = _manager(Session, factory)
-    real_enqueue = manager._enqueue_delta  # noqa: SLF001 - test seam
+    real_enqueue = IdleWatchSession._enqueue_delta  # noqa: SLF001 - test seam
     calls: list[int] = []
 
-    def flaky_enqueue(watch):  # noqa: ANN001
-        if watch.account_id == failing_id:
+    def flaky_enqueue(session):  # noqa: ANN001
+        if session.account_id == failing_id:
             calls.append(1)
             raise RuntimeError("database unavailable")
-        return real_enqueue(watch)
+        return real_enqueue(session)
 
-    manager._enqueue_delta = flaky_enqueue  # noqa: SLF001
+    monkeypatch.setattr(IdleWatchSession, "_enqueue_delta", flaky_enqueue)
     manager.start()
     try:
         # The second call proves a retry actually happened; the pre-fix
         # single-attempt implementation never reaches this point.
         assert _wait_until(lambda: len(calls) >= 2), "catch-up retry never ran"
-        failing_watch = manager._watches[failing_id]  # noqa: SLF001
-        healthy_watch = manager._watches[healthy_id]  # noqa: SLF001
+        failing_watch = manager._sessions[failing_id]  # noqa: SLF001
+        healthy_watch = manager._sessions[healthy_id]  # noqa: SLF001
         assert failing_watch.thread is not None
         started = time.monotonic()
         failing_watch.stop_event.set()
@@ -1164,9 +1203,12 @@ def test_t073_ac003_stop_during_catchup_retry_returns_promptly():
 
 
 @db_only
-def test_ac005_catchup_enqueue_failure_does_not_stop_watch():
+def test_ac005_catchup_enqueue_failure_does_not_stop_watch(monkeypatch):
     """AC-005: a failing catch-up enqueue is isolated; a later IDLE
-    change still enqueues its delta and the account stays healthy."""
+    change still enqueues its delta and the account stays healthy.
+
+    t100: the enqueue seam moved with ownership to the session class.
+    """
     from mail_core.db.session import get_session_factory
 
     Session = get_session_factory()
@@ -1176,16 +1218,16 @@ def test_ac005_catchup_enqueue_failure_does_not_stop_watch():
         session.commit()
 
     manager = _manager(Session, lambda account, folder_row: _FakeSession(outcomes=["changed"]))
-    real_enqueue = manager._enqueue_delta  # noqa: SLF001 - test seam
+    real_enqueue = IdleWatchSession._enqueue_delta  # noqa: SLF001 - test seam
     calls: list[int] = []
 
-    def flaky_enqueue(watch):  # noqa: ANN001
+    def flaky_enqueue(session):  # noqa: ANN001
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("database unavailable during catch-up")
-        return real_enqueue(watch)
+        return real_enqueue(session)
 
-    manager._enqueue_delta = flaky_enqueue  # noqa: SLF001
+    monkeypatch.setattr(IdleWatchSession, "_enqueue_delta", flaky_enqueue)
     manager.start()
     try:
         assert _wait_until(lambda: len(calls) >= 2), "watch stopped after catch-up enqueue failed"

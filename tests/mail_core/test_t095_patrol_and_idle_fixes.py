@@ -35,11 +35,8 @@ from mail_core.mail.storage.models import (
 from mail_core.providers.base import DeltaPage, FolderStatus
 from mail_core.providers.http import PermanentAuthError, RateLimitedError
 from mail_core.providers.imap import ImapProvider
-from mail_core.sync.idle_watcher import (
-    IdleCandidate,
-    IdleWatcherConfig,
-    IdleWatcherManager,
-)
+from mail_core.sync.idle_policy import IdleCandidate, IdleWatcherConfig
+from mail_core.sync.idle_watcher import IdleWatcherManager
 from mail_core.sync.patrol import (
     PATROL_COOLDOWN_S,
     PatrolConfig,
@@ -962,8 +959,8 @@ def test_idle_slow_close_and_rotation_bounds_live_os_threads(stub_imap_servers):
 
         assert _wait_until(slow_close_entered.is_set, timeout_s=3.0)
         # Evicted thread is still alive in slow close -> occupies a seat -> challenger must NOT open yet!
-        assert challenger_id not in manager._watches  # noqa: SLF001
-        assert len(manager._closing_threads) == 1  # noqa: SLF001
+        assert challenger_id not in manager._sessions  # noqa: SLF001
+        assert len(manager._closing) == 1  # noqa: SLF001
         watchers_mid, readers_mid = _live_idle_threads()
         assert len(watchers_mid) <= 4
         assert len(readers_mid) <= 4
@@ -971,15 +968,15 @@ def test_idle_slow_close_and_rotation_bounds_live_os_threads(stub_imap_servers):
 
         # Another reconcile tick while still closing must keep blocking replacement.
         manager._reconcile_once()  # noqa: SLF001
-        assert challenger_id not in manager._watches  # noqa: SLF001
+        assert challenger_id not in manager._sessions  # noqa: SLF001
         watchers_mid2, readers_mid2 = _live_idle_threads()
         assert len(watchers_mid2) + len(readers_mid2) <= 8
 
         # Release the stalled close -> thread finishes -> next reconcile prunes it and opens challenger.
         slow_close_release.set()
-        assert _wait_until(lambda: not any(t.is_alive() for t in manager._closing_threads))  # noqa: SLF001
+        assert _wait_until(lambda: not any(r.watch.has_live_threads() for r in manager._closing))  # noqa: SLF001
         manager._reconcile_once()  # noqa: SLF001
-        assert manager._closing_threads == []  # noqa: SLF001
+        assert manager._closing == []  # noqa: SLF001
         expected_after = {candidates[0].account_id, candidates[1].account_id, candidates[2].account_id, challenger_id}
         assert _wait_until(lambda: manager.held_account_ids() == expected_after)
         watchers_end, readers_end = _live_idle_threads()
@@ -1104,21 +1101,21 @@ def test_idle_live_reader_without_watcher_still_occupies_quota():
         state_candidates[:] = [c0, c1]
         manager._reconcile_once()  # noqa: SLF001
 
-        assert acc1_id not in manager._watches  # noqa: SLF001
-        assert len(manager._closing_threads) == 1  # noqa: SLF001
+        assert acc1_id not in manager._sessions  # noqa: SLF001
+        assert len(manager._closing) == 1  # noqa: SLF001
         watchers_mid, readers_mid = _live_idle_threads()
         assert watchers_mid == []
         assert len(readers_mid) == 1
 
         # Reconcile again while reader is still alive: c1 must still wait.
         manager._reconcile_once()  # noqa: SLF001
-        assert acc1_id not in manager._watches  # noqa: SLF001
+        assert acc1_id not in manager._sessions  # noqa: SLF001
 
         # Unblock reader -> next reconcile reaps it and opens c1.
         reader_release.set()
         assert _wait_until(lambda: _live_idle_threads() == ([], []))
         manager._reconcile_once()  # noqa: SLF001
-        assert manager._closing_threads == []  # noqa: SLF001
+        assert manager._closing == []  # noqa: SLF001
         assert _wait_until(lambda: manager.held_account_ids() == {acc1_id})
         assert opened == [acc0_id, acc1_id]
     finally:

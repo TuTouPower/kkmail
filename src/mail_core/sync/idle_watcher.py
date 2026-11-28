@@ -1,4 +1,4 @@
-"""IMAP IDLE inbox watcher (t061 AC-001..AC-007).
+"""IMAP IDLE inbox watcher runtime (t061 AC-001..AC-007, t100).
 
 Maintains at most one long-lived IDLE connection per eligible IMAP
 account, on the inbox only. IDLE is a wake-up signal: a change notice
@@ -9,39 +9,50 @@ session establishment (first connect, reconnect, credential or seat
 rebuild) also enqueues one catch-up delta under the same key, because
 IDLE only reports changes observed after subscription and the held
 account skips t057 polling; catch-up enqueue failures are retried with
-bounded backoff, and exhausting the budget releases the seat so t057
-polling covers the account until the next reconnect.
+bounded backoff, and exhausting the budget drops the subscription so
+t057 polling covers the account until the next reconnect.
 
-Long-lived connections live under their own quota (independent of the
-``connection_slots`` task budget): quota seats are ranked purely by
-mail data — the newest server arrival time (IMAP INTERNALDATE, stored
-as ``Message.sort_time``) in the account's inbox — with hysteresis so
-borderline accounts do not churn connections. Accounts whose inbox is
-empty rank below every account holding mail, ordered among themselves
-by their other folders' newest arrival, then by account creation time.
-The ranking signal deliberately comes from the messages themselves,
-never from sync bookkeeping timestamps (a checkpoint's ``updated_at``
-is written by the sync machinery itself and would be self-confirming).
-Accounts beyond the quota, accounts whose servers do not advertise
-IDLE, and accounts in failure backoff simply keep the t057 polling
-behaviour — the watcher never marks an account failed.
+Responsibilities are split three ways (t100):
+
+- ``idle_policy`` — the pure seat policy (candidate ranking,
+  hysteresis, backoff curve). No I/O.
+- ``IdleWatchSession`` — one per account; alone owns its provider
+  connection: establishment, renewal, reconnect, change notification
+  and the bounded catch-up compensation.
+- ``IdleWatcherManager`` — alone owns seat allocation, the registry
+  of closing resources and state publication. A session may commit
+  state or release its seat only while it is the instance registered
+  for its account, so a stale thread can never overwrite or tear down
+  its successor.
+
+Two notions are kept distinct throughout: a session whose threads
+have not exited still *occupies* a quota seat (the seat is handed
+over only once both the execution thread and the provider reader
+thread have exited), while only a session with a live subscription
+*suppresses polling* for its account. A session in backoff or in
+closing therefore still consumes quota but no longer holds the
+account back from t057 polling.
+
+Long-lived connections live under their own quota (independent of
+the ``connection_slots`` task budget). Accounts beyond the quota,
+accounts whose servers do not advertise IDLE, and accounts in
+failure backoff simply keep the t057 polling behaviour — the watcher
+never marks an account failed.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import random
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from sqlalchemy import func, select
 
-from mail_core import runtime_budget
 from mail_core.mail.domain.enums import ExecutionOrigin, FolderRemoteState, JobType
 from mail_core.mail.storage.models import (
     Account,
@@ -53,6 +64,13 @@ from mail_core.mail.storage.models import (
     syncable_folder_clauses,
 )
 from mail_core.providers.base import IdleNotSupportedError
+from mail_core.sync.idle_policy import (
+    IdleCandidate,
+    IdleWatcherConfig,
+    backoff_delay,
+    rank_key,
+    select_idle_holders,
+)
 from mail_core.sync.jobs import enqueue_job
 
 log = logging.getLogger("mail_core.sync.idle_watcher")
@@ -65,172 +83,296 @@ _CATCHUP_RETRY_BASE_S = 0.2
 _CATCHUP_RETRY_MAX_S = 2.0
 
 _IDLE_STATE_KEY = "worker:idle_state"
-_LIVE_STATES = frozenset({"idling", "changed"})
+# States in which the session's IDLE subscription is live: only these
+# suppress t057 inbox polling for the account. Occupying a seat is a
+# separate notion (see _ClosingResource).
+_SUBSCRIBED_STATES = frozenset({"idling", "changed"})
 # A blocked fingerprint (no IDLE capability / permanent auth error) is
 # retried after this interval even if the fingerprint never changes, so
 # an out-of-band credential fix cannot leave an account blocked forever.
 _BLOCKED_RETRY_S = 3600.0
 
 
+class _SessionHost(Protocol):
+    """The manager side of the session contract.
 
-@dataclass(frozen=True)
-class IdleWatcherConfig:
-    enabled: bool = True
-    quota: int = runtime_budget.DEFAULT_IDLE_QUOTA
-    max_duration_s: float = 1680.0
-    backoff_base_s: float = 5.0
-    backoff_max_s: float = 300.0
-    hysteresis_s: float = 300.0
-    reconcile_interval_s: float = 15.0
-    close_timeout_s: float = 5.0
+    Both callbacks are ownership-checked by the manager: they take
+    effect only while ``session`` is the instance registered for its
+    account.
+    """
 
-    @classmethod
-    def from_app_config(cls, cfg: Any) -> "IdleWatcherConfig":
-        return cls(
-            enabled=bool(cfg.idle_enabled),
-            quota=int(cfg.idle_quota),
-            max_duration_s=float(cfg.idle_max_duration_s),
-            backoff_base_s=float(cfg.idle_backoff_base_s),
-            backoff_max_s=float(cfg.idle_backoff_max_s),
-            hysteresis_s=float(cfg.idle_hysteresis_s),
+    def session_state_changed(self, session: "IdleWatchSession", state: str) -> None: ...
+
+    def session_blocked(self, session: "IdleWatchSession") -> None: ...
+
+
+class IdleWatchSession:
+    """One account's IDLE watch: owns its connection end to end.
+
+    The session alone establishes, renews and re-establishes the
+    provider IDLE connection, turns change notifications into delta
+    enqueues, and runs the bounded catch-up compensation after every
+    successful (re)subscription. It reports state transitions and
+    capability/auth blocks to its host; whether a report is committed
+    is the host's decision (ownership guard), never the session's.
+    """
+
+    def __init__(
+        self,
+        *,
+        account_id: uuid.UUID,
+        folder_id: uuid.UUID,
+        fingerprint: str,
+        account_snapshot: Account,
+        folder_snapshot: Folder,
+        session_factory: Callable[[], Any],
+        idle_session_factory: Callable[[Account, Folder], Any],
+        config: IdleWatcherConfig,
+        host: _SessionHost | None = None,
+    ) -> None:
+        self.account_id = account_id
+        self.folder_id = folder_id
+        self.fingerprint = fingerprint
+        self.account_snapshot = account_snapshot
+        self.folder_remote_id = folder_snapshot.remote_id
+        self._folder_snapshot = folder_snapshot
+        self._session_factory = session_factory
+        self._idle_session_factory = idle_session_factory
+        self._config = config
+        self._host = host
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        # The live provider IDLE session and its reader thread, owned
+        # by this watch's execution thread; the manager reads them to
+        # abort a stuck close and to know when the seat is truly free.
+        self.provider_session: Any | None = None
+        self.last_reader: threading.Thread | None = None
+        self.state = "connecting"
+
+    # -- lifecycle, driven by the manager -----------------------------------
+
+    def start(self) -> None:
+        self.thread = threading.Thread(
+            target=self._run,
+            name=f"imap-idle-{self.account_id}",
+            daemon=True,
         )
+        self.thread.start()
 
+    def request_stop(self) -> None:
+        self.stop_event.set()
 
-@dataclass(frozen=True)
-class IdleCandidate:
-    """One eligible account plus the mail-data keys seats are ranked by.
+    def abort_provider(self) -> None:
+        abort = getattr(self.provider_session, "abort", None)
+        if callable(abort):
+            try:
+                abort()
+            except Exception:
+                pass
 
-    All timestamps are server arrival times (IMAP INTERNALDATE as
-    stored on ``Message.sort_time``) — never sender ``Date`` headers
-    and never sync bookkeeping timestamps.
-    """
+    def reader_thread(self) -> threading.Thread | None:
+        reader = getattr(self.provider_session, "reader_thread", None)
+        if isinstance(reader, threading.Thread):
+            return reader
+        return self.last_reader
 
-    account_id: uuid.UUID
-    folder_id: uuid.UUID
-    # Newest arrival among messages currently located in the inbox;
-    # None when no located message carries an arrival timestamp.
-    inbox_latest_arrival_at: datetime | None
-    # True when the inbox currently holds at least one message (even
-    # if every arrival timestamp is NULL): an account holding mail
-    # always outranks an account whose inbox is empty.
-    inbox_has_messages: bool
-    # Newest arrival among messages in the account's other folders.
-    other_latest_arrival_at: datetime | None
-    account_created_at: datetime
-    credential_fingerprint: str
+    def has_live_threads(self) -> bool:
+        if self.thread is not None and self.thread.is_alive():
+            return True
+        reader = self.reader_thread()
+        return reader is not None and reader.is_alive()
 
+    # -- state reporting ------------------------------------------------------
 
-def backoff_delay(attempt: int, config: IdleWatcherConfig, *, jitter_fraction: float | None = None) -> float:
-    """Exponential backoff with up to +100% jitter (AC-003 spreading)."""
-    base = min(config.backoff_max_s, config.backoff_base_s * (2**attempt))
-    fraction = random.random() if jitter_fraction is None else jitter_fraction
-    return base * (1.0 + fraction)
+    def _set_state(self, state: str) -> None:
+        self.state = state
+        if self._host is not None:
+            self._host.session_state_changed(self, state)
 
+    def _register_blocked(self) -> None:
+        if self._host is not None:
+            self._host.session_blocked(self)
 
-def _epoch(value: datetime | None) -> float:
-    return value.timestamp() if value is not None else float("-inf")
+    # -- the watch loop ---------------------------------------------------------
 
+    def _run(self) -> None:
+        from mail_core.providers.http import PermanentAuthError
 
-def _seat_group(candidate: IdleCandidate) -> int:
-    """0 = inbox holds mail (main group), 1 = inbox empty."""
-    return 0 if candidate.inbox_has_messages else 1
+        attempts = 0
+        while not self.stop_event.is_set():
+            provider = None
+            try:
+                provider = self._idle_session_factory(self.account_snapshot, self._folder_snapshot)
+            except (IdleNotSupportedError, PermanentAuthError):
+                self._register_blocked()
+                return
+            except Exception as exc:
+                from mail_core.security.redact import safe_error
 
+                log.warning(
+                    "idle connect failed for account %s: %s",
+                    self.account_id,
+                    safe_error(exc),
+                )
+                attempts += 1
+                self._set_state("backoff")
+                if self.stop_event.wait(backoff_delay(attempts, self._config)):
+                    return
+                continue
 
-def _primary_arrival(candidate: IdleCandidate) -> datetime | None:
-    """The comparable arrival key within a candidate's seat group."""
-    if candidate.inbox_has_messages:
-        return candidate.inbox_latest_arrival_at
-    return candidate.other_latest_arrival_at
+            reader = getattr(provider, "reader_thread", None)
+            self.provider_session = provider
+            if isinstance(reader, threading.Thread):
+                self.last_reader = reader
+            catchup_ok = True
+            try:
+                if self.stop_event.is_set():
+                    return
+                attempts = 0
+                self._record_connect_success()
+                self._set_state("idling")
+                if not self._enqueue_catchup():
+                    # Persistent enqueue failure: drop the subscription
+                    # so t057 inbox polling can cover the account until
+                    # the next reconnect retries the catch-up.
+                    self._set_state("backoff")
+                    attempts += 1
+                    catchup_ok = False
+                else:
+                    while not self.stop_event.is_set():
+                        outcome = provider.wait_for_change(
+                            timeout_s=self._config.max_duration_s,
+                            stop_event=self.stop_event,
+                        )
+                        if outcome == "changed":
+                            self._set_state("changed")
+                            self._enqueue_delta()
+                            self._set_state("idling")
+                        elif outcome == "stopped":
+                            return
+                        # "timeout": fall through and re-enter IDLE.
+            except Exception as exc:
+                from mail_core.providers.imap import IdleSessionDisconnected
+                from mail_core.security.redact import safe_error
 
+                if not isinstance(exc, IdleSessionDisconnected):
+                    log.warning(
+                        "idle session error for account %s: %s",
+                        self.account_id,
+                        safe_error(exc),
+                    )
+                attempts += 1
+                self._set_state("backoff")
+            finally:
+                if provider is not None:
+                    try:
+                        provider.close()
+                    except Exception:
+                        pass
+                self.provider_session = None
+            if not catchup_ok and self.stop_event.is_set():
+                return
+            if self.stop_event.wait(backoff_delay(attempts, self._config)):
+                return
 
-def _rank_key(candidate: IdleCandidate) -> tuple:
-    """Total seat order, hottest first:
+    def _record_connect_success(self) -> None:
+        """A successful IDLE session is a provider round-trip: close the breaker."""
 
-    1. accounts whose inbox holds mail, before empty-inbox accounts;
-    2. within a group, the group's primary arrival time, newest first
-       (inbox arrivals for the main group, other-folder arrivals for
-       the empty-inbox group; a missing timestamp sorts last);
-    3. other-folder newest arrival, newest first;
-    4. account creation time, newest first;
-    5. account id, ascending (stable final tie-break).
-    """
-    return (
-        _seat_group(candidate),
-        -_epoch(_primary_arrival(candidate)),
-        -_epoch(candidate.other_latest_arrival_at),
-        -candidate.account_created_at.timestamp(),
-        str(candidate.account_id),
-    )
+        from mail_core.accounts.health import record_connectivity_success
 
+        try:
+            with self._session_factory() as db_session:
+                record_connectivity_success(db_session, self.account_id)
+                db_session.commit()
+        except Exception:
+            log.debug("idle connectivity reset failed for account %s", self.account_id, exc_info=True)
 
-def _challenger_advantage_s(challenger: IdleCandidate, incumbent: IdleCandidate) -> float:
-    """How much hotter a challenger is than an incumbent, in seconds.
+    def _enqueue_catchup(self) -> bool:
+        """Reconcile the gap before this IDLE session reports changes.
 
-    Only defined within one seat group on comparable primary keys:
-    a challenger from the hotter group wins categorically (infinite
-    advantage, hysteresis never rescues across groups); when either
-    primary key is missing there is nothing comparable, so the
-    advantage is 0 and the incumbent is kept (stable order, no churn).
-    """
-    if _seat_group(challenger) != _seat_group(incumbent):
-        return float("inf")
-    challenger_key = _primary_arrival(challenger)
-    incumbent_key = _primary_arrival(incumbent)
-    if challenger_key is None or incumbent_key is None:
-        return 0.0
-    return (challenger_key - incumbent_key).total_seconds()
+        IDLE only signals changes observed after the subscription starts;
+        ``SELECT``'s current EXISTS snapshot is discarded by the provider.
+        Anything that arrived while no session was active is therefore
+        invisible unless a delta runs. Enqueue the same deduplicated
+        delta used by IDLE wake-ups and t057 so a reconnect always
+        converges without bypassing the baseline gate, lease or fencing.
 
+        Retries a transient enqueue failure with bounded backoff. Returns
+        False when the budget is exhausted or the watch is stopping; the
+        caller must then drop the subscription so t057 polling covers
+        the account and the next reconnect retries the catch-up.
+        """
+        for attempt in range(1, _CATCHUP_RETRY_ATTEMPTS + 1):
+            try:
+                self._enqueue_delta()
+                return True
+            except Exception:
+                if attempt == _CATCHUP_RETRY_ATTEMPTS:
+                    log.exception(
+                        "idle catch-up delta enqueue failed for account %s; "
+                        "releasing the IDLE seat for polling",
+                        self.account_id,
+                    )
+                    return False
+                delay = min(
+                    _CATCHUP_RETRY_BASE_S * (2 ** (attempt - 1)),
+                    _CATCHUP_RETRY_MAX_S,
+                )
+                log.warning(
+                    "idle catch-up delta enqueue failed for account %s; "
+                    "retrying in %.2fs (%d/%d)",
+                    self.account_id,
+                    delay,
+                    attempt,
+                    _CATCHUP_RETRY_ATTEMPTS,
+                )
+                if self.stop_event.wait(delay):
+                    return False
+        return False
 
-def select_idle_holders(
-    candidates: list[IdleCandidate],
-    *,
-    current_holders: set[uuid.UUID],
-    quota: int,
-    hysteresis_s: float,
-    now: datetime,
-) -> set[uuid.UUID]:
-    """Choose which accounts hold IDLE seats (AC-005).
-
-    Top-``quota`` by the seat order in ``_rank_key`` wins; an incumbent
-    outside the top set keeps its seat unless the weakest challenger's
-    advantage on the comparable arrival key exceeds ``hysteresis_s``
-    — this prevents connection churn when two accounts' newest mail
-    arrived at near-identical times.
-    """
-    ranked = sorted(candidates, key=_rank_key)
-    by_id = {c.account_id: c for c in ranked}
-    rank_pos = {c.account_id: pos for pos, c in enumerate(ranked)}
-    selected: set[uuid.UUID] = {c.account_id for c in ranked[:quota]}
-
-    for incumbent in ranked:
-        if incumbent.account_id not in current_holders or incumbent.account_id in selected:
-            continue
-        challengers = [aid for aid in selected if aid not in current_holders]
-        if not challengers:
-            break
-        weakest = max(challengers, key=lambda aid: rank_pos[aid])
-        advantage = _challenger_advantage_s(by_id[weakest], incumbent)
-        if advantage <= hysteresis_s:
-            selected.discard(weakest)
-            selected.add(incumbent.account_id)
-    return selected
+    def _enqueue_delta(self) -> None:
+        with self._session_factory() as db_session:
+            enqueue_job(
+                db_session,
+                job_type=JobType.SYNC_FOLDER_DELTA.value,
+                execution_origin=ExecutionOrigin.BACKGROUND,
+                account_id=self.account_id,
+                payload={"folder_id": str(self.folder_id)},
+                priority=60,
+                dedupe_key=f"delta:{self.account_id}:{self.folder_id}",
+            )
+            db_session.commit()
 
 
 @dataclass
-class _Watch:
-    account_id: uuid.UUID
-    folder_id: uuid.UUID
-    fingerprint: str
-    account_snapshot: Account
-    folder_remote_id: str
-    stop_event: threading.Event = field(default_factory=threading.Event)
-    thread: threading.Thread | None = None
-    session: Any | None = None
-    last_reader: threading.Thread | None = None
+class _ClosingResource:
+    """A retired watch session whose threads have not fully exited.
+
+    The resource keeps occupying its quota seat until BOTH the watch
+    execution thread and the provider reader thread have exited; only
+    then may the seat be handed to a new watch. The subscription is
+    already gone at this point, so the account polls again while the
+    seat is still occupied.
+    """
+
+    watch: IdleWatchSession
+
+    def is_exited(self) -> bool:
+        return not self.watch.has_live_threads()
+
+    def abort_provider(self) -> None:
+        self.watch.abort_provider()
 
 
 class IdleWatcherManager:
-    """Owns all IDLE watch threads for this worker process."""
+    """Owns all IDLE watch sessions for this worker process.
+
+    The manager alone allocates quota seats (via ``idle_policy``),
+    tracks closing resources until their threads exit, and publishes
+    the aggregate state. Sessions report through the host callbacks;
+    a report is committed only while the reporting session is the
+    instance registered for its account.
+    """
 
     def __init__(
         self,
@@ -248,40 +390,44 @@ class IdleWatcherManager:
         self._config = config
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._watches: dict[uuid.UUID, _Watch] = {}
-        self._closing_threads: list[threading.Thread] = []
-        self._closing_readers: dict[int, threading.Thread] = {}
-        self._closing_watches: dict[int, _Watch] = {}
+        self._sessions: dict[uuid.UUID, IdleWatchSession] = {}
+        self._closing: list[_ClosingResource] = []
         self._states: dict[uuid.UUID, str] = {}
         # account_id -> (fingerprint, blocked_at monotonic)
         self._blocked: dict[uuid.UUID, tuple[str, float]] = {}
         self._lock = threading.Lock()
 
-    def _prune_closing_threads_locked(self) -> int:
-        alive: list[threading.Thread] = []
-        seen: set[int] = set()
-        for thread in self._closing_threads:
-            tid = id(thread)
-            if tid in seen:
-                continue
-            watch = self._closing_watches.get(tid)
-            if watch is not None:
-                reader = getattr(watch.session, "reader_thread", None) if watch.session is not None else None
-                if not isinstance(reader, threading.Thread):
-                    reader = watch.last_reader
-                if isinstance(reader, threading.Thread) and reader.is_alive():
-                    self._closing_readers[tid] = reader
-            if thread.is_alive():
-                seen.add(tid)
-                alive.append(thread)
-                continue
-            self._closing_watches.pop(tid, None)
-            reader = self._closing_readers.pop(tid, None)
-            if reader is not None and reader.is_alive() and id(reader) not in seen:
-                seen.add(id(reader))
-                alive.append(reader)
-        self._closing_threads = alive
-        return len(alive)
+    # -- session host callbacks (ownership-guarded) ---------------------------
+
+    def session_state_changed(self, session: IdleWatchSession, state: str) -> None:
+        """Commit a session's state, guarded by watch identity.
+
+        A stale thread (replaced while stuck in connect) must not
+        overwrite its successor's state.
+        """
+        with self._lock:
+            if self._sessions.get(session.account_id) is session:
+                self._states[session.account_id] = state
+
+    def session_blocked(self, session: IdleWatchSession) -> None:
+        """Record a capability/auth block and deregister this session.
+
+        Deregistration is load-bearing: while a dead session entry
+        stays registered, reconcile's open loop skips the account
+        before ever consulting ``_blocked``, so neither a fingerprint
+        change nor the blocked-age expiry could ever retry it. The
+        account keeps polling (t057) in the meantime. A stale session
+        whose successor is already registered must not clobber the
+        successor's state or block record.
+        """
+        with self._lock:
+            current = self._sessions.get(session.account_id)
+            if current is not None and current is not session:
+                return
+            self._blocked[session.account_id] = (session.fingerprint, time.monotonic())
+            if current is session:
+                self._sessions.pop(session.account_id, None)
+            self._states[session.account_id] = "fallback"
 
     # -- public surface ----------------------------------------------------
 
@@ -300,79 +446,84 @@ class IdleWatcherManager:
     def stop(self) -> None:
         self._stop.set()
         with self._lock:
-            watches = list(self._watches.values())
-            self._watches.clear()
-            self._prune_closing_threads_locked()
-            closing = list(self._closing_threads)
-        # Wake every watch before joining: a catch-up enqueue runs on
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+            self._prune_closing_locked()
+            closing = list(self._closing)
+        # Wake every session before joining: a catch-up enqueue runs on
         # these threads, so serial set+join would multiply the shutdown
         # latency by the number of held seats.
-        for watch in watches:
-            watch.stop_event.set()
+        for session in sessions:
+            session.request_stop()
         deadline = time.monotonic() + 5.0
-        for watch in watches:
-            # A watch registered by _open_watch just before start() returns
-            # has no OS thread yet; joining it raises RuntimeError. Its loop
-            # observes the stop flags as soon as it starts.
-            if watch.thread is None or watch.thread.ident is None:
+        for session in sessions:
+            # A session registered by _open_session just before start()
+            # returns has no OS thread yet; joining it raises
+            # RuntimeError. Its loop observes the stop flags as soon as
+            # it starts.
+            thread = session.thread
+            if thread is None or thread.ident is None:
                 continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            join_wait = min(remaining, self._config.close_timeout_s)
-            watch.thread.join(timeout=join_wait)
-            if watch.thread.is_alive():
-                with self._lock:
-                    session = watch.session
-                abort = getattr(session, "abort", None)
-                if callable(abort):
-                    try:
-                        abort()
-                    except Exception:
-                        pass
-                    watch.thread.join(timeout=max(0.0, deadline - time.monotonic()))
-        for thread in closing:
+            thread.join(timeout=min(remaining, self._config.close_timeout_s))
+            if thread.is_alive():
+                session.abort_provider()
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        for resource in closing:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            with self._lock:
-                closing_watch = self._closing_watches.get(id(thread))
-                closing_session = closing_watch.session if closing_watch is not None else None
-            if thread.ident is not None and thread.is_alive():
-                abort = getattr(closing_session, "abort", None)
-                if callable(abort):
-                    try:
-                        abort()
-                    except Exception:
-                        pass
+            thread = resource.watch.thread
+            if thread is not None and thread.ident is not None and thread.is_alive():
+                resource.abort_provider()
                 thread.join(timeout=remaining)
         with self._lock:
-            for watch in watches:
-                if (
-                    watch.thread is not None
-                    and watch.thread.ident is not None
-                    and (
-                        watch.thread.is_alive()
-                        or (watch.last_reader is not None and watch.last_reader.is_alive())
-                    )
-                ):
-                    self._record_closing_watch_locked(watch.thread, watch.session, watch=watch)
-            self._prune_closing_threads_locked()
+            for session in sessions:
+                if session.has_live_threads():
+                    self._record_closing_locked(session)
+            self._prune_closing_locked()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
 
     def held_account_ids(self) -> set[uuid.UUID]:
+        """Accounts whose live subscription suppresses inbox polling.
+
+        This is subscription validity, not seat occupancy: a session
+        in backoff or in closing no longer suppresses polling even
+        while its threads still occupy a quota seat. The set is
+        derived from the committed states, so it can never disagree
+        with the published aggregate state.
+        """
         with self._lock:
             return {
                 account_id
-                for account_id, state in self._states.items()
-                if state in _LIVE_STATES and account_id in self._watches
+                for account_id in self._sessions
+                if self._states.get(account_id) in _SUBSCRIBED_STATES
             }
 
     def snapshot(self) -> dict[uuid.UUID, str]:
         with self._lock:
             return dict(self._states)
+
+    # -- closing-resource registry -------------------------------------------
+
+    def _prune_closing_locked(self) -> int:
+        self._closing = [r for r in self._closing if not r.is_exited()]
+        return len(self._closing)
+
+    def _record_closing_locked(self, session: IdleWatchSession) -> None:
+        if not session.has_live_threads():
+            return
+        if any(r.watch is session for r in self._closing):
+            return
+        self._closing.append(_ClosingResource(watch=session))
+
+    def _occupied_seats_locked(self) -> int:
+        """Active sessions plus closing resources: the quota charge."""
+        return len(self._sessions) + len(self._closing)
 
     # -- reconcile ----------------------------------------------------------
 
@@ -393,17 +544,17 @@ class IdleWatcherManager:
         now = datetime.now(timezone.utc)
         # Sweep residual state for accounts that left the candidate set
         # while blocked (disabled / paused / deleted): their deregistered
-        # watches never pass through the close loop below, so without
+        # sessions never pass through the close loop below, so without
         # this their fallback state and block record would linger in the
         # published snapshot for the process lifetime.
         candidate_ids = {c.account_id for c in candidates}
         with self._lock:
-            self._prune_closing_threads_locked()
-            stale_ids = (set(self._states) | set(self._blocked)) - candidate_ids - set(self._watches)
+            self._prune_closing_locked()
+            stale_ids = (set(self._states) | set(self._blocked)) - candidate_ids - set(self._sessions)
             for stale_id in stale_ids:
                 self._states.pop(stale_id, None)
                 self._blocked.pop(stale_id, None)
-            current = set(self._watches)
+            current = set(self._sessions)
         desired = select_idle_holders(
             candidates,
             current_holders=current,
@@ -411,31 +562,31 @@ class IdleWatcherManager:
             hysteresis_s=self._config.hysteresis_s,
             now=now,
         )
-        ranked_candidates = sorted(candidates, key=_rank_key)
+        ranked_candidates = sorted(candidates, key=rank_key)
         by_id = {c.account_id: c for c in ranked_candidates}
 
-        # Close watches that lost their seat, became ineligible, or whose
-        # credential fingerprint changed (AC-006).
+        # Close sessions that lost their seat, became ineligible, or
+        # whose credential fingerprint changed.
         with self._lock:
-            watches = dict(self._watches)
+            sessions = dict(self._sessions)
         to_close: list[uuid.UUID] = []
-        for account_id, watch in watches.items():
+        for account_id, session in sessions.items():
             candidate = by_id.get(account_id)
             if (
                 account_id not in desired
                 or candidate is None
-                or candidate.credential_fingerprint != watch.fingerprint
+                or candidate.credential_fingerprint != session.fingerprint
             ):
-                watch.stop_event.set()
+                session.request_stop()
                 to_close.append(account_id)
         for account_id in to_close:
-            self._close_watch(account_id)
+            self._close_session(account_id)
             with self._lock:
                 self._states.pop(account_id, None)
 
-        # Open watches for desired accounts not yet watched and not
-        # blocked under their current fingerprint. Live un-joined closing
-        # threads continue to occupy quota seats until they exit.
+        # Open sessions for desired accounts not yet watched and not
+        # blocked under their current fingerprint. Closing resources
+        # continue to occupy quota seats until their threads exit.
         for candidate in ranked_candidates:
             if self._stop.is_set():
                 return
@@ -443,10 +594,10 @@ class IdleWatcherManager:
             if account_id not in desired:
                 continue
             with self._lock:
-                self._prune_closing_threads_locked()
-                if len(self._watches) + len(self._closing_threads) >= self._config.quota:
+                self._prune_closing_locked()
+                if self._occupied_seats_locked() >= self._config.quota:
                     break
-                if account_id in self._watches:
+                if account_id in self._sessions:
                     continue
                 blocked = self._blocked.get(account_id)
                 if blocked is not None:
@@ -459,7 +610,7 @@ class IdleWatcherManager:
                         continue
                     # Fingerprint changed or the block aged out: retry.
                     self._blocked.pop(account_id, None)
-            self._open_watch(candidate)
+            self._open_session(candidate)
         self._publish_state()
 
     def _load_candidates(self) -> list[IdleCandidate]:
@@ -533,12 +684,12 @@ class IdleWatcherManager:
                 )
             return candidates
 
-    # -- per-account watch ---------------------------------------------------
+    # -- per-account session lifecycle -----------------------------------------
 
-    def _open_watch(self, candidate: IdleCandidate) -> None:
-        with self._session_factory() as session:
-            account = session.get(Account, candidate.account_id)
-            folder = session.get(Folder, candidate.folder_id)
+    def _open_session(self, candidate: IdleCandidate) -> None:
+        with self._session_factory() as db_session:
+            account = db_session.get(Account, candidate.account_id)
+            folder = db_session.get(Folder, candidate.folder_id)
             if account is None or folder is None:
                 return
             account_snapshot = Account(
@@ -558,264 +709,47 @@ class IdleWatcherManager:
                 selectable=folder.selectable,
                 remote_state=folder.remote_state,
             )
-        watch = _Watch(
+        session = IdleWatchSession(
             account_id=candidate.account_id,
             folder_id=candidate.folder_id,
             fingerprint=candidate.credential_fingerprint,
             account_snapshot=account_snapshot,
-            folder_remote_id=folder_snapshot.remote_id,
-        )
-        watch.thread = threading.Thread(
-            target=self._watch_loop,
-            args=(watch, folder_snapshot),
-            name=f"imap-idle-{candidate.account_id}",
-            daemon=True,
+            folder_snapshot=folder_snapshot,
+            session_factory=self._session_factory,
+            idle_session_factory=self._idle_session_factory,
+            config=self._config,
+            host=self,
         )
         with self._lock:
-            self._prune_closing_threads_locked()
+            self._prune_closing_locked()
             if (
                 self._stop.is_set()
-                or candidate.account_id in self._watches
-                or len(self._watches) + len(self._closing_threads) >= self._config.quota
+                or candidate.account_id in self._sessions
+                or self._occupied_seats_locked() >= self._config.quota
             ):
                 return
-            self._watches[candidate.account_id] = watch
+            self._sessions[candidate.account_id] = session
             self._states[candidate.account_id] = "connecting"
-            watch.thread.start()
+            session.start()
 
-    def _record_closing_watch_locked(
-        self,
-        thread: threading.Thread,
-        session: Any | None,
-        *,
-        watch: _Watch | None = None,
-    ) -> None:
-        reader = getattr(session, "reader_thread", None) if session is not None else None
-        if not isinstance(reader, threading.Thread) and watch is not None:
-            reader = watch.last_reader
-        if thread.is_alive():
-            if thread not in self._closing_threads:
-                self._closing_threads.append(thread)
-            if watch is not None:
-                self._closing_watches[id(thread)] = watch
-            if isinstance(reader, threading.Thread) and reader.is_alive():
-                self._closing_readers[id(thread)] = reader
-        elif isinstance(reader, threading.Thread) and reader.is_alive():
-            if reader not in self._closing_threads:
-                self._closing_threads.append(reader)
-
-    def _close_watch(self, account_id: uuid.UUID) -> None:
+    def _close_session(self, account_id: uuid.UUID) -> None:
         with self._lock:
-            watch = self._watches.pop(account_id, None)
-        if watch is None:
+            session = self._sessions.pop(account_id, None)
+        if session is None:
             return
-        watch.stop_event.set()
-        thread = watch.thread
+        session.request_stop()
+        thread = session.thread
         if thread is None or thread.ident is None:
             return
-        with self._lock:
-            session = watch.session
         thread.join(timeout=self._config.close_timeout_s)
+        if thread.is_alive():
+            session.abort_provider()
+            thread.join(timeout=0.5)
         with self._lock:
-            session = watch.session or session
-        if thread.is_alive() and session is not None:
-            abort = getattr(session, "abort", None)
-            if callable(abort):
-                try:
-                    abort()
-                except Exception:
-                    pass
-                thread.join(timeout=0.5)
-        with self._lock:
-            session = watch.session or session
-            self._record_closing_watch_locked(thread, session, watch=watch)
-            self._prune_closing_threads_locked()
+            self._record_closing_locked(session)
+            self._prune_closing_locked()
 
-    def _watch_loop(self, watch: _Watch, folder_snapshot: Folder) -> None:
-        from mail_core.providers.http import PermanentAuthError
-
-        attempts = 0
-        while not self._stop.is_set() and not watch.stop_event.is_set():
-            session = None
-            try:
-                session = self._idle_session_factory(watch.account_snapshot, folder_snapshot)
-            except IdleNotSupportedError:
-                self._register_blocked(watch)
-                return
-            except PermanentAuthError:
-                self._register_blocked(watch)
-                return
-            except Exception as exc:
-                from mail_core.security.redact import safe_error
-
-                log.warning(
-                    "idle connect failed for account %s: %s",
-                    watch.account_id,
-                    safe_error(exc),
-                )
-                attempts += 1
-                self._set_state(watch, "backoff")
-                if watch.stop_event.wait(backoff_delay(attempts, self._config)):
-                    return
-                continue
-
-            reader = getattr(session, "reader_thread", None)
-            with self._lock:
-                watch.session = session
-                if isinstance(reader, threading.Thread):
-                    watch.last_reader = reader
-            catchup_ok = True
-            try:
-                if self._stop.is_set() or watch.stop_event.is_set():
-                    return
-                attempts = 0
-                self._record_connect_success(watch.account_id)
-                self._set_state(watch, "idling")
-                if not self._enqueue_catchup(watch):
-                    # Persistent enqueue failure: stop holding the seat so
-                    # t057 inbox polling can cover the account until the
-                    # next reconnect retries the catch-up.
-                    self._set_state(watch, "backoff")
-                    attempts += 1
-                    catchup_ok = False
-                else:
-                    while not self._stop.is_set() and not watch.stop_event.is_set():
-                        outcome = session.wait_for_change(
-                            timeout_s=self._config.max_duration_s,
-                            stop_event=watch.stop_event,
-                        )
-                        if outcome == "changed":
-                            self._set_state(watch, "changed")
-                            self._enqueue_delta(watch)
-                            self._set_state(watch, "idling")
-                        elif outcome == "stopped":
-                            return
-                        # "timeout": fall through and re-enter IDLE.
-            except Exception as exc:
-                from mail_core.providers.imap import IdleSessionDisconnected
-                from mail_core.security.redact import safe_error
-
-                if not isinstance(exc, IdleSessionDisconnected):
-                    log.warning(
-                        "idle session error for account %s: %s",
-                        watch.account_id,
-                        safe_error(exc),
-                    )
-                attempts += 1
-                self._set_state(watch, "backoff")
-            finally:
-                if session is not None:
-                    try:
-                        session.close()
-                    except Exception:
-                        pass
-                with self._lock:
-                    watch.session = None
-            if not catchup_ok and (self._stop.is_set() or watch.stop_event.is_set()):
-                return
-            if watch.stop_event.wait(backoff_delay(attempts, self._config)):
-                return
-
-    def _register_blocked(self, watch: _Watch) -> None:
-        """Record a capability/auth block and deregister this watch.
-
-        Deregistration is load-bearing: while a dead watch entry stays
-        in ``_watches``, reconcile's open loop skips the account before
-        ever consulting ``_blocked``, so neither a fingerprint change
-        nor the blocked-age expiry could ever retry it (AC-006). The
-        account keeps polling (t057) in the meantime.
-        """
-        with self._lock:
-            current = self._watches.get(watch.account_id)
-            if current is not None and current is not watch:
-                # A newer watch already replaced this thread (it was
-                # stuck in connect while reconcile rotated the seat):
-                # the stale thread must not clobber the new watch's
-                # state or block record.
-                return
-            self._blocked[watch.account_id] = (watch.fingerprint, time.monotonic())
-            if current is watch:
-                self._watches.pop(watch.account_id, None)
-            self._states[watch.account_id] = "fallback"
-
-    def _record_connect_success(self, account_id: uuid.UUID) -> None:
-        """A successful IDLE session is a provider round-trip: close the breaker."""
-
-        from mail_core.accounts.health import record_connectivity_success
-
-        try:
-            with self._session_factory() as session:
-                record_connectivity_success(session, account_id)
-                session.commit()
-        except Exception:
-            log.debug("idle connectivity reset failed for account %s", account_id, exc_info=True)
-
-    def _enqueue_catchup(self, watch: _Watch) -> bool:
-        """Reconcile the gap before this IDLE session reports changes.
-
-        IDLE only signals changes observed after the subscription starts;
-        ``SELECT``'s current EXISTS snapshot is discarded by the provider.
-        Anything that arrived while no session was active is therefore
-        invisible unless a delta runs. Enqueue the same deduplicated
-        delta used by IDLE wake-ups and t057 so a reconnect always
-        converges without bypassing the baseline gate, lease or fencing.
-
-        Retries a transient enqueue failure with bounded backoff. Returns
-        False when the budget is exhausted or the watch is stopping; the
-        caller must then release the seat so t057 polling covers the
-        account and the next reconnect retries the catch-up.
-        """
-        for attempt in range(1, _CATCHUP_RETRY_ATTEMPTS + 1):
-            try:
-                self._enqueue_delta(watch)
-                return True
-            except Exception:
-                if attempt == _CATCHUP_RETRY_ATTEMPTS:
-                    log.exception(
-                        "idle catch-up delta enqueue failed for account %s; "
-                        "releasing the IDLE seat for polling",
-                        watch.account_id,
-                    )
-                    return False
-                delay = min(
-                    _CATCHUP_RETRY_BASE_S * (2 ** (attempt - 1)),
-                    _CATCHUP_RETRY_MAX_S,
-                )
-                log.warning(
-                    "idle catch-up delta enqueue failed for account %s; "
-                    "retrying in %.2fs (%d/%d)",
-                    watch.account_id,
-                    delay,
-                    attempt,
-                    _CATCHUP_RETRY_ATTEMPTS,
-                )
-                if watch.stop_event.wait(delay) or self._stop.is_set():
-                    return False
-        return False
-
-    def _enqueue_delta(self, watch: _Watch) -> None:
-        with self._session_factory() as session:
-            enqueue_job(
-                session,
-                job_type=JobType.SYNC_FOLDER_DELTA.value,
-                execution_origin=ExecutionOrigin.BACKGROUND,
-                account_id=watch.account_id,
-                payload={"folder_id": str(watch.folder_id)},
-                priority=60,
-                dedupe_key=f"delta:{watch.account_id}:{watch.folder_id}",
-            )
-            session.commit()
-
-    def _set_state(self, watch: _Watch, state: str) -> None:
-        """Write a watch state, guarded by watch identity.
-
-        A stale thread (replaced while stuck in connect) must not
-        overwrite its successor's state — same guard as
-        ``_register_blocked``.
-        """
-        with self._lock:
-            if self._watches.get(watch.account_id) is watch:
-                self._states[watch.account_id] = state
+    # -- state publication ------------------------------------------------------
 
     def _publish_state(self) -> None:
         """Expose watcher states on the existing AppSetting status store."""
@@ -826,13 +760,13 @@ class IdleWatcherManager:
                 "states": {str(k): v for k, v in states.items()},
                 "held": [str(k) for k in self.held_account_ids()],
             }
-            with self._session_factory() as session:
-                row = session.get(AppSetting, _IDLE_STATE_KEY)
+            with self._session_factory() as db_session:
+                row = db_session.get(AppSetting, _IDLE_STATE_KEY)
                 if row is None:
-                    session.add(AppSetting(key=_IDLE_STATE_KEY, value=json.dumps(payload, sort_keys=True)))
+                    db_session.add(AppSetting(key=_IDLE_STATE_KEY, value=json.dumps(payload, sort_keys=True)))
                 else:
                     row.value = json.dumps(payload, sort_keys=True)
-                session.commit()
+                db_session.commit()
         except Exception:
             log.debug("idle watcher state publish failed", exc_info=True)
 
@@ -877,7 +811,7 @@ def get_idle_manager(session_factory: Callable[[], Any] | None = None) -> IdleWa
 
 
 def held_idle_account_ids() -> set[uuid.UUID]:
-    """Accounts currently holding an IDLE seat (empty outside the worker)."""
+    """Accounts currently holding a live IDLE subscription (empty outside the worker)."""
     with _manager_lock:
         manager = _manager
     if manager is None:

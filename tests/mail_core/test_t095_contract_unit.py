@@ -96,7 +96,7 @@ def test_ac003_idle_threads_bounded_by_quota_not_account_count():
     """AC-003: IDLE seat count (=> thread count) is capped by the quota."""
     import uuid as _uuid
 
-    from mail_core.sync.idle_watcher import IdleCandidate, select_idle_holders
+    from mail_core.sync.idle_policy import IdleCandidate, select_idle_holders
 
     now = datetime.now(timezone.utc)
     candidates = [

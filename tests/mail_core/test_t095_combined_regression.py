@@ -23,7 +23,8 @@ from mail_core.readiness import get_readiness_probe
 from mail_core.realtime.listener import get_outbox_listener
 from mail_core.realtime.outbox import prune_published, publication_head
 from mail_core.realtime.publication import publish_committed_batch
-from mail_core.sync.idle_watcher import IdleWatcherConfig, IdleWatcherManager
+from mail_core.sync.idle_policy import IdleWatcherConfig
+from mail_core.sync.idle_watcher import IdleWatcherManager
 from mail_core.worker.heartbeat import record_heartbeat
 from mail_core.worker.main import schedule_periodic_inbox_sync
 
