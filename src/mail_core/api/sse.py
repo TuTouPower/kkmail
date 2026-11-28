@@ -21,7 +21,13 @@ from starlette.background import BackgroundTask
 from mail_core.api.deps import require_auth
 from mail_core.db.session import get_session_factory
 from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE, get_dispatcher
-from mail_core.realtime.outbox import fetch_published_since, pruned_through_seq, publication_head, to_item
+from mail_core.realtime.outbox import (
+    enter_repeatable_read_if_postgres,
+    fetch_published_since,
+    pruned_through_seq,
+    publication_head,
+    to_item,
+)
 from mail_core.security.auth import AuthPrincipal
 
 log = logging.getLogger("mail_core.api.sse")
@@ -140,11 +146,36 @@ def _parse_v2_cursor(raw: str | None) -> tuple[str | None, int | None, bool]:
     return None, None, True
 
 
+def _enter_repeatable_read(session: Any) -> None:
+    enter_repeatable_read_if_postgres(session)
+
+
+def _retention_gap_plan(
+    *,
+    head_cursor: str,
+    head_seq: int,
+    seq: int,
+    pruned_seq: int,
+) -> _ReplayPlan:
+    payload = {
+        "reason": "retention_gap",
+        "head": head_cursor,
+        "last_seq": seq,
+        "pruned_through_seq": pruned_seq,
+    }
+    return _ReplayPlan(
+        frames=[(head_cursor, "client.resync_hint", payload)],
+        cursor=head_cursor,
+        cursor_seq=head_seq,
+    )
+
+
 def _build_replay(raw_cursor: str | None, account_id: UUID | None) -> _ReplayPlan:
     """Synchronous DB work for SSE replay — run via ``asyncio.to_thread``."""
     Session = get_session_factory()
     frames: list[tuple[str, str, dict[str, Any]]] = []
     with Session() as session:
+        _enter_repeatable_read(session)
         current_epoch, head_seq = publication_head(session)
         head_cursor = f"v2:{current_epoch}:{head_seq}"
 
@@ -173,14 +204,12 @@ def _build_replay(raw_cursor: str | None, account_id: UUID | None) -> _ReplayPla
         # streams, and consumers that lag far behind.
         pruned_seq = pruned_through_seq(session)
         if seq < pruned_seq:
-            payload = {
-                "reason": "retention_gap",
-                "head": head_cursor,
-                "last_seq": seq,
-                "pruned_through_seq": pruned_seq,
-            }
-            frames.append((head_cursor, "client.resync_hint", payload))
-            return _ReplayPlan(frames=frames, cursor=head_cursor, cursor_seq=head_seq)
+            return _retention_gap_plan(
+                head_cursor=head_cursor,
+                head_seq=head_seq,
+                seq=seq,
+                pruned_seq=pruned_seq,
+            )
 
         if head_seq - seq > RESYNC_GAP:
             payload = {"reason": "gap_too_large", "head": head_cursor, "last_seq": seq}
@@ -193,12 +222,31 @@ def _build_replay(raw_cursor: str | None, account_id: UUID | None) -> _ReplayPla
             limit=REPLAY_LIMIT,
             account_id=account_id,
         )
+        # Materialize rows before expiring session state so re-reading
+        # pruned_through_seq does not trigger lazy attribute reloads.
+        items = [(int(row.publication_seq or 0), to_item(row)) for row in rows]
+        expire_all = getattr(session, "expire_all", None)
+        if callable(expire_all):
+            expire_all()
+        post_pruned_seq = pruned_through_seq(session)
+        if seq < post_pruned_seq:
+            post_epoch, post_head_seq = publication_head(session)
+            post_head_cursor = f"v2:{post_epoch}:{post_head_seq}"
+            if post_epoch != current_epoch:
+                payload = {"reason": "epoch_mismatch", "head": post_head_cursor}
+                frames.append((post_head_cursor, "client.resync_hint", payload))
+                return _ReplayPlan(frames=frames, cursor=post_head_cursor, cursor_seq=post_head_seq)
+            return _retention_gap_plan(
+                head_cursor=post_head_cursor,
+                head_seq=post_head_seq,
+                seq=seq,
+                pruned_seq=post_pruned_seq,
+            )
+
         seen: set[str] = set()
         cursor_seq_local = seq
-        for row in rows:
-            r_seq = int(row.publication_seq or 0)
+        for r_seq, item in items:
             cursor_id = f"v2:{current_epoch}:{r_seq}"
-            item = to_item(row)
             if account_id and item.account_id and item.account_id != str(account_id):
                 continue
             if cursor_id in seen:

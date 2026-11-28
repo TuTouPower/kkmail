@@ -268,6 +268,28 @@ class OutboxDispatcher:
                 ok = False
         return ok
 
+    def _emit_retention_gap_hint(
+        self,
+        *,
+        epoch: str,
+        head_seq: int,
+        pruned_seq: int,
+    ) -> None:
+        hint = {
+            "id": f"v2:{epoch}:{head_seq}",
+            "publication_seq": head_seq,
+            "event": "client.resync_hint",
+            "account_id": None,
+            "data": {
+                "reason": "retention_gap",
+                "pruned_through_seq": pruned_seq,
+                "last_seq": self._last_dispatched_seq,
+            },
+            "created_at": None,
+        }
+        self._fanout(hint)
+        self._last_dispatched_seq = head_seq
+
     def dispatch_once(self, *, require_subscribers: bool = False) -> int:
         """Publish committed rows, commit publication_seq, then fan out locally.
 
@@ -277,6 +299,7 @@ class OutboxDispatcher:
         """
         from mail_core.db.session import get_session_factory
         from mail_core.realtime.outbox import (
+            enter_repeatable_read_if_postgres,
             fetch_published_since,
             pruned_through_seq,
             publication_head,
@@ -318,27 +341,38 @@ class OutboxDispatcher:
                 # have been pruned. It must not silently skip them — emit the
                 # re-fetch hint and rebuild the local cursor at head.
                 if self._last_dispatched_seq < pruned_seq:
-                    hint = {
-                        "id": f"v2:{epoch}:{head_seq}",
-                        "publication_seq": head_seq,
-                        "event": "client.resync_hint",
-                        "account_id": None,
-                        "data": {
-                            "reason": "retention_gap",
-                            "pruned_through_seq": pruned_seq,
-                            "last_seq": self._last_dispatched_seq,
-                        },
-                        "created_at": None,
-                    }
-                    self._fanout(hint)
-                    self._last_dispatched_seq = head_seq
+                    self._emit_retention_gap_hint(
+                        epoch=epoch,
+                        head_seq=head_seq,
+                        pruned_seq=pruned_seq,
+                    )
                     return dispatched_count
 
-                # Phase 2: read the committed stream (no transaction is held
+                # Phase 2: read the committed stream inside one REPEATABLE READ
+                # snapshot on PG and re-verify pruned_through_seq against the
+                # fetched window before fanning out (no transaction is held
                 # across the fan-out below).
                 with Session() as session:
+                    enter_repeatable_read_if_postgres(session)
                     rows = fetch_published_since(session, after_seq=self._last_dispatched_seq, limit=100)
                     items = [(int(row.publication_seq), to_item(row)) for row in rows]
+                    expire_all = getattr(session, "expire_all", None)
+                    if callable(expire_all):
+                        expire_all()
+                    post_pruned_seq = pruned_through_seq(session)
+                    if self._last_dispatched_seq < post_pruned_seq:
+                        post_epoch, post_head_seq = publication_head(session)
+                        resolved_head = (
+                            post_head_seq
+                            if post_epoch != epoch
+                            else max(head_seq, post_head_seq)
+                        )
+                        self._emit_retention_gap_hint(
+                            epoch=post_epoch,
+                            head_seq=resolved_head,
+                            pruned_seq=post_pruned_seq,
+                        )
+                        return dispatched_count
 
                 for seq, item in items:
                     payload = {

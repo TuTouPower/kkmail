@@ -97,3 +97,21 @@ def test_migration_backfills_watermark_from_updated_at():
     text = migration.read_text()
     assert "last_delta_settled_at" in text
     assert "SET last_delta_settled_at = updated_at" in text
+
+
+def test_ac003_retention_exceeds_in_flight_reclaim_and_convergence_bounds():
+    """AC-003 quantitative bound: 24h retention >> 300s reclaim and 30m target convergence."""
+    from mail_core.sync.execution import converge_stalled_targets
+    from mail_core.sync.jobs import reclaim_stale_claims
+
+    reclaim_default = inspect.signature(reclaim_stale_claims).parameters["older_than"].default
+    converge_default = inspect.signature(converge_stalled_targets).parameters["stale_after"].default
+
+    assert reclaim_default == timedelta(seconds=300)
+    assert converge_default == timedelta(minutes=30)
+    assert COMPLETED_JOB_RETENTION == timedelta(hours=24)
+    assert PUBLISHED_OUTBOX_RETENTION == timedelta(hours=24)
+    assert reclaim_default < converge_default
+    assert converge_default * 48 <= COMPLETED_JOB_RETENTION
+    assert converge_default * 48 <= PUBLISHED_OUTBOX_RETENTION
+    assert reclaim_default * 288 <= COMPLETED_JOB_RETENTION
