@@ -65,7 +65,7 @@ _CATCHUP_RETRY_BASE_S = 0.2
 _CATCHUP_RETRY_MAX_S = 2.0
 
 _IDLE_STATE_KEY = "worker:idle_state"
-_LIVE_STATES = frozenset({"connecting", "idling", "changed"})
+_LIVE_STATES = frozenset({"idling", "changed"})
 # A blocked fingerprint (no IDLE capability / permanent auth error) is
 # retried after this interval even if the fingerprint never changes, so
 # an out-of-band credential fix cannot leave an account blocked forever.
@@ -82,6 +82,7 @@ class IdleWatcherConfig:
     backoff_max_s: float = 300.0
     hysteresis_s: float = 300.0
     reconcile_interval_s: float = 15.0
+    close_timeout_s: float = 5.0
 
     @classmethod
     def from_app_config(cls, cfg: Any) -> "IdleWatcherConfig":
@@ -224,6 +225,8 @@ class _Watch:
     folder_remote_id: str
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: threading.Thread | None = None
+    session: Any | None = None
+    last_reader: threading.Thread | None = None
 
 
 class IdleWatcherManager:
@@ -246,10 +249,39 @@ class IdleWatcherManager:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._watches: dict[uuid.UUID, _Watch] = {}
+        self._closing_threads: list[threading.Thread] = []
+        self._closing_readers: dict[int, threading.Thread] = {}
+        self._closing_watches: dict[int, _Watch] = {}
         self._states: dict[uuid.UUID, str] = {}
         # account_id -> (fingerprint, blocked_at monotonic)
         self._blocked: dict[uuid.UUID, tuple[str, float]] = {}
         self._lock = threading.Lock()
+
+    def _prune_closing_threads_locked(self) -> int:
+        alive: list[threading.Thread] = []
+        seen: set[int] = set()
+        for thread in self._closing_threads:
+            tid = id(thread)
+            if tid in seen:
+                continue
+            watch = self._closing_watches.get(tid)
+            if watch is not None:
+                reader = getattr(watch.session, "reader_thread", None) if watch.session is not None else None
+                if not isinstance(reader, threading.Thread):
+                    reader = watch.last_reader
+                if isinstance(reader, threading.Thread) and reader.is_alive():
+                    self._closing_readers[tid] = reader
+            if thread.is_alive():
+                seen.add(tid)
+                alive.append(thread)
+                continue
+            self._closing_watches.pop(tid, None)
+            reader = self._closing_readers.pop(tid, None)
+            if reader is not None and reader.is_alive() and id(reader) not in seen:
+                seen.add(id(reader))
+                alive.append(reader)
+        self._closing_threads = alive
+        return len(alive)
 
     # -- public surface ----------------------------------------------------
 
@@ -270,6 +302,8 @@ class IdleWatcherManager:
         with self._lock:
             watches = list(self._watches.values())
             self._watches.clear()
+            self._prune_closing_threads_locked()
+            closing = list(self._closing_threads)
         # Wake every watch before joining: a catch-up enqueue runs on
         # these threads, so serial set+join would multiply the shutdown
         # latency by the number of held seats.
@@ -285,7 +319,45 @@ class IdleWatcherManager:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            watch.thread.join(timeout=remaining)
+            join_wait = min(remaining, self._config.close_timeout_s)
+            watch.thread.join(timeout=join_wait)
+            if watch.thread.is_alive():
+                with self._lock:
+                    session = watch.session
+                abort = getattr(session, "abort", None)
+                if callable(abort):
+                    try:
+                        abort()
+                    except Exception:
+                        pass
+                    watch.thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        for thread in closing:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            with self._lock:
+                closing_watch = self._closing_watches.get(id(thread))
+                closing_session = closing_watch.session if closing_watch is not None else None
+            if thread.ident is not None and thread.is_alive():
+                abort = getattr(closing_session, "abort", None)
+                if callable(abort):
+                    try:
+                        abort()
+                    except Exception:
+                        pass
+                thread.join(timeout=remaining)
+        with self._lock:
+            for watch in watches:
+                if (
+                    watch.thread is not None
+                    and watch.thread.ident is not None
+                    and (
+                        watch.thread.is_alive()
+                        or (watch.last_reader is not None and watch.last_reader.is_alive())
+                    )
+                ):
+                    self._record_closing_watch_locked(watch.thread, watch.session, watch=watch)
+            self._prune_closing_threads_locked()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
@@ -313,7 +385,11 @@ class IdleWatcherManager:
             self._stop.wait(self._config.reconcile_interval_s)
 
     def _reconcile_once(self) -> None:
+        if self._stop.is_set():
+            return
         candidates = self._load_candidates()
+        if self._stop.is_set():
+            return
         now = datetime.now(timezone.utc)
         # Sweep residual state for accounts that left the candidate set
         # while blocked (disabled / paused / deleted): their deregistered
@@ -322,6 +398,7 @@ class IdleWatcherManager:
         # published snapshot for the process lifetime.
         candidate_ids = {c.account_id for c in candidates}
         with self._lock:
+            self._prune_closing_threads_locked()
             stale_ids = (set(self._states) | set(self._blocked)) - candidate_ids - set(self._watches)
             for stale_id in stale_ids:
                 self._states.pop(stale_id, None)
@@ -334,12 +411,14 @@ class IdleWatcherManager:
             hysteresis_s=self._config.hysteresis_s,
             now=now,
         )
-        by_id = {c.account_id: c for c in candidates}
+        ranked_candidates = sorted(candidates, key=_rank_key)
+        by_id = {c.account_id: c for c in ranked_candidates}
 
         # Close watches that lost their seat, became ineligible, or whose
         # credential fingerprint changed (AC-006).
         with self._lock:
             watches = dict(self._watches)
+        to_close: list[uuid.UUID] = []
         for account_id, watch in watches.items():
             candidate = by_id.get(account_id)
             if (
@@ -347,15 +426,26 @@ class IdleWatcherManager:
                 or candidate is None
                 or candidate.credential_fingerprint != watch.fingerprint
             ):
-                self._close_watch(account_id)
-                with self._lock:
-                    self._states.pop(account_id, None)
+                watch.stop_event.set()
+                to_close.append(account_id)
+        for account_id in to_close:
+            self._close_watch(account_id)
+            with self._lock:
+                self._states.pop(account_id, None)
 
         # Open watches for desired accounts not yet watched and not
-        # blocked under their current fingerprint.
-        for account_id in desired:
-            candidate = by_id[account_id]
+        # blocked under their current fingerprint. Live un-joined closing
+        # threads continue to occupy quota seats until they exit.
+        for candidate in ranked_candidates:
+            if self._stop.is_set():
+                return
+            account_id = candidate.account_id
+            if account_id not in desired:
+                continue
             with self._lock:
+                self._prune_closing_threads_locked()
+                if len(self._watches) + len(self._closing_threads) >= self._config.quota:
+                    break
                 if account_id in self._watches:
                     continue
                 blocked = self._blocked.get(account_id)
@@ -482,17 +572,64 @@ class IdleWatcherManager:
             daemon=True,
         )
         with self._lock:
+            self._prune_closing_threads_locked()
+            if (
+                self._stop.is_set()
+                or candidate.account_id in self._watches
+                or len(self._watches) + len(self._closing_threads) >= self._config.quota
+            ):
+                return
             self._watches[candidate.account_id] = watch
             self._states[candidate.account_id] = "connecting"
-        watch.thread.start()
+            watch.thread.start()
+
+    def _record_closing_watch_locked(
+        self,
+        thread: threading.Thread,
+        session: Any | None,
+        *,
+        watch: _Watch | None = None,
+    ) -> None:
+        reader = getattr(session, "reader_thread", None) if session is not None else None
+        if not isinstance(reader, threading.Thread) and watch is not None:
+            reader = watch.last_reader
+        if thread.is_alive():
+            if thread not in self._closing_threads:
+                self._closing_threads.append(thread)
+            if watch is not None:
+                self._closing_watches[id(thread)] = watch
+            if isinstance(reader, threading.Thread) and reader.is_alive():
+                self._closing_readers[id(thread)] = reader
+        elif isinstance(reader, threading.Thread) and reader.is_alive():
+            if reader not in self._closing_threads:
+                self._closing_threads.append(reader)
 
     def _close_watch(self, account_id: uuid.UUID) -> None:
         with self._lock:
             watch = self._watches.pop(account_id, None)
-        if watch is not None:
-            watch.stop_event.set()
-            if watch.thread is not None:
-                watch.thread.join(timeout=5.0)
+        if watch is None:
+            return
+        watch.stop_event.set()
+        thread = watch.thread
+        if thread is None or thread.ident is None:
+            return
+        with self._lock:
+            session = watch.session
+        thread.join(timeout=self._config.close_timeout_s)
+        with self._lock:
+            session = watch.session or session
+        if thread.is_alive() and session is not None:
+            abort = getattr(session, "abort", None)
+            if callable(abort):
+                try:
+                    abort()
+                except Exception:
+                    pass
+                thread.join(timeout=0.5)
+        with self._lock:
+            session = watch.session or session
+            self._record_closing_watch_locked(thread, session, watch=watch)
+            self._prune_closing_threads_locked()
 
     def _watch_loop(self, watch: _Watch, folder_snapshot: Folder) -> None:
         from mail_core.providers.http import PermanentAuthError
@@ -522,35 +659,38 @@ class IdleWatcherManager:
                     return
                 continue
 
-            attempts = 0
-            self._record_connect_success(watch.account_id)
-            self._set_state(watch, "idling")
-            if not self._enqueue_catchup(watch):
-                # Persistent enqueue failure: stop holding the seat so
-                # t057 inbox polling can cover the account until the
-                # next reconnect retries the catch-up.
-                self._set_state(watch, "backoff")
-                try:
-                    session.close()
-                except Exception:
-                    pass
-                attempts += 1
-                if watch.stop_event.wait(backoff_delay(attempts, self._config)):
-                    return
-                continue
+            reader = getattr(session, "reader_thread", None)
+            with self._lock:
+                watch.session = session
+                if isinstance(reader, threading.Thread):
+                    watch.last_reader = reader
+            catchup_ok = True
             try:
-                while not self._stop.is_set() and not watch.stop_event.is_set():
-                    outcome = session.wait_for_change(
-                        timeout_s=self._config.max_duration_s,
-                        stop_event=watch.stop_event,
-                    )
-                    if outcome == "changed":
-                        self._set_state(watch, "changed")
-                        self._enqueue_delta(watch)
-                        self._set_state(watch, "idling")
-                    elif outcome == "stopped":
-                        return
-                    # "timeout": fall through and re-enter IDLE.
+                if self._stop.is_set() or watch.stop_event.is_set():
+                    return
+                attempts = 0
+                self._record_connect_success(watch.account_id)
+                self._set_state(watch, "idling")
+                if not self._enqueue_catchup(watch):
+                    # Persistent enqueue failure: stop holding the seat so
+                    # t057 inbox polling can cover the account until the
+                    # next reconnect retries the catch-up.
+                    self._set_state(watch, "backoff")
+                    attempts += 1
+                    catchup_ok = False
+                else:
+                    while not self._stop.is_set() and not watch.stop_event.is_set():
+                        outcome = session.wait_for_change(
+                            timeout_s=self._config.max_duration_s,
+                            stop_event=watch.stop_event,
+                        )
+                        if outcome == "changed":
+                            self._set_state(watch, "changed")
+                            self._enqueue_delta(watch)
+                            self._set_state(watch, "idling")
+                        elif outcome == "stopped":
+                            return
+                        # "timeout": fall through and re-enter IDLE.
             except Exception as exc:
                 from mail_core.providers.imap import IdleSessionDisconnected
                 from mail_core.security.redact import safe_error
@@ -569,6 +709,10 @@ class IdleWatcherManager:
                         session.close()
                     except Exception:
                         pass
+                with self._lock:
+                    watch.session = None
+            if not catchup_ok and (self._stop.is_set() or watch.stop_event.is_set()):
+                return
             if watch.stop_event.wait(backoff_delay(attempts, self._config)):
                 return
 

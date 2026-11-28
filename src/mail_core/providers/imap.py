@@ -122,10 +122,17 @@ class ImapIdleSession:
     def __init__(self, client: Any):
         self._client = client
         self._lines: "queue.Queue[Any]" = queue.Queue()
+        self._abort_lock = threading.Lock()
+        self._close_lock = threading.Lock()
+        self._closed = False
         self._reader = threading.Thread(
             target=self._pump, name="imap-idle-reader", daemon=True
         )
         self._reader.start()
+
+    @property
+    def reader_thread(self) -> threading.Thread:
+        return self._reader
 
     def _pump(self) -> None:
         try:
@@ -137,6 +144,26 @@ class ImapIdleSession:
                 self._lines.put(line)
         except Exception:
             self._lines.put(_IDLE_EOF)
+
+    def _next_line_until(
+        self,
+        *,
+        deadline: float,
+        slice_s: float,
+        stop_event: threading.Event | None = None,
+    ) -> Any:
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise queue.Empty
+            try:
+                return self._lines.get(timeout=min(slice_s, remaining))
+            except queue.Empty:
+                if self._closed:
+                    return _IDLE_EOF
+                continue
 
     def wait_for_change(
         self,
@@ -152,15 +179,28 @@ class ImapIdleSession:
         ``"stopped"`` (``stop_event`` set). Raises
         :class:`IdleSessionDisconnected` on drop or server BYE.
         """
+        if self._closed:
+            raise IdleSessionDisconnected("session closed")
         client = self._client
         tag = client._new_tag()
         tag_b = tag.encode() if isinstance(tag, str) else tag
-        client.send(tag_b + b" IDLE\r\n")
         try:
-            first = self._lines.get(timeout=10.0)
+            client.send(tag_b + b" IDLE\r\n")
+        except (OSError, ValueError):
+            raise IdleSessionDisconnected("connection closed sending IDLE") from None
+        try:
+            first = self._next_line_until(
+                deadline=time.monotonic() + 10.0,
+                slice_s=slice_s,
+                stop_event=stop_event,
+            )
         except queue.Empty:
             raise IdleSessionDisconnected("no IDLE continuation response") from None
+        if first is None:
+            return "stopped"
         if first is _IDLE_EOF:
+            if stop_event.is_set():
+                return "stopped"
             raise IdleSessionDisconnected("connection closed before IDLE continuation")
         if not first.startswith(b"+"):
             raise IdleSessionDisconnected(f"unexpected IDLE response: {first!r}")
@@ -178,8 +218,14 @@ class ImapIdleSession:
             try:
                 line = self._lines.get(timeout=min(slice_s, remaining))
             except queue.Empty:
+                if self._closed:
+                    if stop_event.is_set():
+                        return "stopped"
+                    raise IdleSessionDisconnected("connection closed during IDLE")
                 continue
             if line is _IDLE_EOF:
+                if stop_event.is_set():
+                    return "stopped"
                 raise IdleSessionDisconnected("connection closed during IDLE")
             stripped = line.strip()
             if stripped.startswith(b"* BYE"):
@@ -189,27 +235,63 @@ class ImapIdleSession:
             ):
                 outcome = "changed"
                 break
-        client.send(b"DONE\r\n")
+        try:
+            client.send(b"DONE\r\n")
+        except (OSError, ValueError):
+            if outcome == "stopped":
+                return "stopped"
+            raise IdleSessionDisconnected("connection closed sending DONE") from None
+        done_timeout = 1.0 if outcome == "stopped" else 10.0
+        done_deadline = time.monotonic() + done_timeout
         while True:
-            line = self._lines.get(timeout=10.0)
+            try:
+                line = self._next_line_until(
+                    deadline=done_deadline,
+                    slice_s=slice_s,
+                )
+            except queue.Empty:
+                if outcome == "stopped":
+                    return "stopped"
+                raise IdleSessionDisconnected("timed out waiting for DONE response") from None
             if line is _IDLE_EOF:
+                if outcome == "stopped":
+                    return "stopped"
                 raise IdleSessionDisconnected("connection closed while ending IDLE")
             if line.strip().startswith(tag_b):
                 break
         return outcome
 
+    def abort(self) -> None:
+        """Non-blocking socket teardown to unblock reader/waiter threads promptly."""
+        with self._abort_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._lines.put(_IDLE_EOF)
+            sock = getattr(self._client, "sock", None)
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except (OSError, ValueError):
+                    pass
+                try:
+                    sock.close()
+                except (OSError, ValueError):
+                    pass
+
     def close(self) -> None:
-        sock = getattr(self._client, "sock", None)
-        if sock is not None:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                sock.close()
-            except OSError:
-                pass
-        self._reader.join(timeout=2.0)
+        with self._close_lock:
+            self.abort()
+            self._reader.join(timeout=2.0)
+            if not self._reader.is_alive():
+                file_obj = getattr(self._client, "_file", None)
+                if file_obj is None and not isinstance(self._client, imaplib.IMAP4):
+                    file_obj = getattr(self._client, "file", None)
+                if file_obj is not None and callable(getattr(file_obj, "close", None)):
+                    try:
+                        file_obj.close()
+                    except Exception:
+                        pass
 
 
 def _send_imap_id(client: imaplib.IMAP4):

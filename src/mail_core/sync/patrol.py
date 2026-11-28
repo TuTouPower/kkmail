@@ -21,11 +21,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import func, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import Integer, Text, cast, exists, func, literal, null, select, text, update
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID, insert as pg_insert
 from sqlalchemy.orm import Session
 
+from mail_core.accounts.health import mark_credential_invalid
+from mail_core.config import get_config
 from mail_core.mail.domain.enums import ExecutionOrigin, JobType
+from mail_core.mail.domain.failures import FailureDomain
 from mail_core.mail.storage.models import (
     Account,
     Folder,
@@ -34,6 +37,9 @@ from mail_core.mail.storage.models import (
     syncable_folder_clauses,
 )
 from mail_core.providers.base import FolderStatus
+from mail_core.providers.factory import build_provider
+from mail_core.security.redact import safe_error
+from mail_core.sync.context import classify_failure
 from mail_core.sync.jobs import enqueue_job
 
 log = logging.getLogger("mail_core.sync.patrol")
@@ -43,8 +49,8 @@ _DIMENSIONS = ("messages", "uidnext", "unseen", "highestmodseq")
 # t095 AC-004: account-level patrol cooldown. Held in account.config so it
 # survives across sweeps and processes, deliberately separate from
 # connectivity_state (t090 isolates background transport failures from account
-# health display). Only the single patrol sweeper advances it, so there is no
-# concurrent half-open probing.
+# health display). Key-level atomic JSONB updates and half-open claims keep
+# concurrent config edits intact and prevent concurrent half-open probing.
 _CFG_PATROL_COOLDOWN = "patrol_cooldown_until"
 PATROL_COOLDOWN_S = 300.0
 
@@ -77,6 +83,79 @@ def _clear_cooldown(account: Account) -> None:
     account.config = updated
 
 
+def _expire_cached_account_config(session: Session, account_id: uuid.UUID) -> None:
+    identity_map = getattr(session, "identity_map", None)
+    if identity_map is None:
+        return
+    cached = identity_map.get((Account, (account_id,), None))
+    if cached is not None:
+        session.expire(cached, ["config"])
+
+
+def _jsonb_set_cooldown_expr(until_iso: str) -> Any:
+    return func.jsonb_set(
+        func.coalesce(Account.config, text("'{}'::jsonb")),
+        literal([_CFG_PATROL_COOLDOWN], ARRAY(Text)),
+        func.to_jsonb(cast(until_iso, Text)),
+        True,
+    )
+
+
+def _db_set_cooldown(session: Session, account_id: uuid.UUID, now: datetime) -> None:
+    until_iso = (now + timedelta(seconds=PATROL_COOLDOWN_S)).isoformat()
+    stmt = (
+        update(Account)
+        .where(Account.id == account_id)
+        .values(config=_jsonb_set_cooldown_expr(until_iso))
+        .execution_options(synchronize_session=False)
+    )
+    session.execute(stmt)
+    _expire_cached_account_config(session, account_id)
+
+
+def _db_clear_cooldown(session: Session, account_id: uuid.UUID) -> None:
+    key = cast(_CFG_PATROL_COOLDOWN, Text)
+    stmt = (
+        update(Account)
+        .where(
+            Account.id == account_id,
+            func.jsonb_exists(func.coalesce(Account.config, text("'{}'::jsonb")), key),
+        )
+        .values(config=func.coalesce(Account.config, text("'{}'::jsonb")).op("-")(key))
+        .execution_options(synchronize_session=False)
+    )
+    session.execute(stmt)
+    _expire_cached_account_config(session, account_id)
+
+
+def _db_claim_half_open(
+    session: Session,
+    account_id: uuid.UUID,
+    *,
+    expected_raw: str,
+    now: datetime,
+) -> bool:
+    """Atomically advance an expired cooldown to claim single-holder half-open probe rights."""
+    key = cast(_CFG_PATROL_COOLDOWN, Text)
+    claim_until_iso = (now + timedelta(seconds=PATROL_COOLDOWN_S)).isoformat()
+    stmt = (
+        update(Account)
+        .where(
+            Account.id == account_id,
+            Account.sync_enabled.is_(True),
+            func.jsonb_exists(func.coalesce(Account.config, text("'{}'::jsonb")), key),
+            Account.config.op("->>")(key) == expected_raw,
+        )
+        .values(config=_jsonb_set_cooldown_expr(claim_until_iso))
+        .returning(Account.id)
+        .execution_options(synchronize_session=False)
+    )
+    claimed = session.scalar(stmt) is not None
+    if claimed:
+        _expire_cached_account_config(session, account_id)
+    return claimed
+
+
 @dataclass
 class PatrolConfig:
     enabled: bool = True
@@ -102,6 +181,34 @@ class PatrolResult:
     skipped_not_due: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _ProbeTarget:
+    folder_id: uuid.UUID
+    folder_remote_id: str
+    account_id: uuid.UUID
+    account_snapshot: Account
+    had_fps: bool
+    baseline: FolderStatus | None
+    baseline_ready: bool
+    raw_cooldown_until: str | None
+
+
+def _snapshot_account(account: Account) -> Account:
+    return Account(
+        id=account.id,
+        email=account.email,
+        provider=account.provider,
+        display_name=account.display_name,
+        credential_ref=account.credential_ref,
+        group_id=account.group_id,
+        sync_enabled=account.sync_enabled,
+        credential_state=account.credential_state,
+        connectivity_state=account.connectivity_state,
+        sync_activity=account.sync_activity,
+        config=dict(account.config or {}),
+    )
+
+
 def changed_dimensions(baseline: FolderStatus, probe: FolderStatus) -> tuple[str, ...]:
     """Dimensions that provably changed between two snapshots.
 
@@ -119,9 +226,70 @@ def changed_dimensions(baseline: FolderStatus, probe: FolderStatus) -> tuple[str
 
 
 def _default_provider_factory(account: Account):
-    from mail_core.providers.factory import build_provider
-
     return build_provider(account)
+
+
+def _record_attempt(
+    session: Session,
+    folder_id: uuid.UUID,
+    *,
+    had_fps: bool,
+    current_time: datetime,
+    failed: bool,
+    last_status: dict[str, Any] | None = None,
+) -> None:
+    """Advance the probe-attempt clock for success AND failure in one SQL write."""
+    if had_fps:
+        values: dict[str, Any] = {
+            "last_probe_at": current_time,
+            "last_probe_failures": (
+                func.coalesce(FolderPatrolStatus.last_probe_failures, 0) + 1
+                if failed
+                else 0
+            ),
+            "updated_at": func.now(),
+        }
+        if not failed and last_status is not None:
+            values["last_status"] = last_status
+        session.execute(
+            update(FolderPatrolStatus)
+            .where(FolderPatrolStatus.folder_id == folder_id)
+            .values(**values)
+            .execution_options(synchronize_session="fetch")
+        )
+        return
+
+    status_expr = (
+        null().cast(JSONB)
+        if failed or last_status is None
+        else cast(literal(last_status, JSONB), JSONB)
+    )
+    stmt = pg_insert(FolderPatrolStatus).from_select(
+        ["folder_id", "last_status", "last_probe_at", "last_probe_failures"],
+        select(
+            cast(literal(folder_id), UUID(as_uuid=True)),
+            status_expr,
+            literal(current_time),
+            cast(literal(1 if failed else 0), Integer),
+        ).where(exists().where(Folder.id == folder_id)),
+    )
+    conflict_set: dict[str, Any] = {
+        "last_probe_at": stmt.excluded.last_probe_at,
+        "last_probe_failures": (
+            func.coalesce(FolderPatrolStatus.last_probe_failures, 0) + 1
+            if failed
+            else 0
+        ),
+        "updated_at": func.now(),
+    }
+    if not failed and last_status is not None:
+        conflict_set["last_status"] = stmt.excluded.last_status
+    session.execute(
+        stmt.on_conflict_do_update(
+            index_elements=[FolderPatrolStatus.folder_id],
+            set_=conflict_set,
+        )
+    )
 
 
 def schedule_folder_status_patrol(
@@ -133,8 +301,6 @@ def schedule_folder_status_patrol(
 ) -> PatrolResult:
     """Run one patrol sweep over due folders (oldest-probed first)."""
     if config is None:
-        from mail_core.config import get_config
-
         config = PatrolConfig.from_app_config(get_config())
     result = PatrolResult()
     if not config.enabled:
@@ -142,6 +308,15 @@ def schedule_folder_status_patrol(
     factory = provider_factory or _default_provider_factory
     current_time = now or datetime.now(timezone.utc)
     now_epoch = current_time.timestamp()
+    caller_had_tx = bool(session.in_transaction())
+
+    def _end_tx_if_owned() -> None:
+        if not caller_had_tx and session.in_transaction():
+            session.commit()
+
+    def _rollback_if_owned() -> None:
+        if not caller_had_tx and session.in_transaction():
+            session.rollback()
 
     rows = list(
         session.execute(
@@ -193,148 +368,169 @@ def schedule_folder_status_patrol(
     due.sort(key=_rotation_key)
     selected = due[: config.max_probes]
 
-    def _record_attempt(
-        folder: Folder,
-        fps: FolderPatrolStatus | None,
-        *,
-        failed: bool,
-    ) -> FolderPatrolStatus:
-        """Advance the probe-attempt clock for success AND failure.
-
-        A failed folder must not stay permanently "most overdue":
-        retrying it on every 60s scheduler sweep would hammer a
-        rate-limited server and starve every other folder (AC-013 /
-        AC-014). The attempt timestamp is the due-clock; failures are
-        counted separately and cleared on the next success.
-        """
-        if fps is None:
-            values = dict(
+    account_snapshots: dict[uuid.UUID, Account] = {}
+    targets: list[_ProbeTarget] = []
+    for _epoch, folder, account, cp, fps in selected:
+        snapshot = account_snapshots.get(account.id)
+        if snapshot is None:
+            snapshot = _snapshot_account(account)
+            account_snapshots[account.id] = snapshot
+        raw_cd = (account.config or {}).get(_CFG_PATROL_COOLDOWN)
+        raw_cooldown_until = str(raw_cd) if raw_cd not in (None, "") else None
+        baseline = (
+            FolderStatus.from_dict(fps.last_status)
+            if fps is not None and fps.last_status is not None
+            else None
+        )
+        targets.append(
+            _ProbeTarget(
                 folder_id=folder.id,
-                last_status=None,
-                last_probe_at=current_time,
-                last_probe_failures=0,
-            )
-            session.execute(
-                pg_insert(FolderPatrolStatus).values(**values).on_conflict_do_nothing()
-            )
-            fps = session.get(FolderPatrolStatus, folder.id)
-        failure_count = (
-            func.coalesce(FolderPatrolStatus.last_probe_failures, 0) + 1 if failed else 0
-        )
-        session.execute(
-            update(FolderPatrolStatus)
-            .where(FolderPatrolStatus.folder_id == folder.id)
-            .values(
-                last_probe_at=current_time,
-                last_probe_failures=failure_count,
-                updated_at=func.now(),
+                folder_remote_id=folder.remote_id,
+                account_id=account.id,
+                account_snapshot=snapshot,
+                had_fps=fps is not None,
+                baseline=baseline,
+                baseline_ready=bool(cp.full_scan_complete) if cp is not None else False,
+                raw_cooldown_until=raw_cooldown_until,
             )
         )
-        session.flush()
-        return fps
 
-    from mail_core.accounts.health import mark_credential_invalid
-    from mail_core.mail.domain.failures import FailureDomain
-    from mail_core.security.redact import safe_error
-    from mail_core.sync.context import classify_failure
+    # Close the read transaction before any network I/O when caller did not
+    # open a fixture transaction (Finding 4).
+    _end_tx_if_owned()
 
     providers: dict[uuid.UUID, Any] = {}
-    # t095 AC-004 / t096 AC-003: account-level short-circuit for THIS sweep. A
-    # transport or auth failure on one directory skips the account's remaining
-    # directories this round with zero DB writes; a single-directory error does
-    # not. Cross-round cooldown is held in account.config (set below), a
-    # distinct authority from connectivity_state so t090 isolation holds.
     short_circuited: set[uuid.UUID] = set()
+    claimed_half_open: set[uuid.UUID] = set()
+    account_has_cooldown: set[uuid.UUID] = set()
+
+    def _run_short_tx(fn: Callable[[], Any]) -> Any:
+        try:
+            value = fn()
+            _end_tx_if_owned()
+            return value
+        except Exception:
+            _rollback_if_owned()
+            raise
 
     def _mark_account_failure(
-        account: Account,
+        account_id: uuid.UUID,
         exc: Exception,
         *,
         domain: FailureDomain | None = None,
     ) -> None:
         resolved_domain = domain if domain is not None else classify_failure(exc).domain
         if resolved_domain == FailureDomain.AUTH:
-            mark_credential_invalid(session, account.id)
-        # Background transport failures are isolated (t090): hold a
-        # patrol-only cooldown rather than polluting connectivity_state.
-        _set_cooldown(account, current_time)
-        short_circuited.add(account.id)
+            mark_credential_invalid(session, account_id)
+        _db_set_cooldown(session, account_id, current_time)
+        account_has_cooldown.add(account_id)
+        short_circuited.add(account_id)
 
-    for _epoch, folder, account, cp, fps in selected:
-        if account.id in short_circuited:
+    def _persist_failed_attempt(
+        target: _ProbeTarget,
+        *,
+        exc: Exception | None = None,
+        domain: FailureDomain | None = None,
+    ) -> None:
+        def _write() -> None:
+            if exc is not None:
+                resolved = domain if domain is not None else classify_failure(exc).domain
+                if getattr(resolved, "value", str(resolved)) in ("transport", "auth"):
+                    _mark_account_failure(target.account_id, exc, domain=resolved)
+            _record_attempt(
+                session,
+                target.folder_id,
+                had_fps=target.had_fps,
+                current_time=current_time,
+                failed=True,
+            )
+
+        _run_short_tx(_write)
+        result.failed += 1
+
+    for target in targets:
+        if target.account_id in short_circuited:
             continue
-        provider = providers.get(account.id)
+
+        if target.raw_cooldown_until is not None and target.account_id not in claimed_half_open:
+            claimed = _run_short_tx(
+                lambda: _db_claim_half_open(
+                    session,
+                    target.account_id,
+                    expected_raw=target.raw_cooldown_until,
+                    now=current_time,
+                )
+            )
+            if not claimed:
+                short_circuited.add(target.account_id)
+                continue
+            claimed_half_open.add(target.account_id)
+            account_has_cooldown.add(target.account_id)
+
+        provider = providers.get(target.account_id)
         if provider is None:
             try:
-                provider = factory(account)
+                provider = factory(target.account_snapshot)
             except Exception as exc:  # credential/config errors isolate per account
                 log.warning(
                     "patrol provider build failed for account %s: %s",
-                    account.id,
+                    target.account_id,
                     safe_error(exc),
                 )
-                _mark_account_failure(account, exc)
-                _record_attempt(folder, fps, failed=True)
-                result.failed += 1
+                _persist_failed_attempt(target, exc=exc, domain=classify_failure(exc).domain)
                 continue
-            providers[account.id] = provider
+            providers[target.account_id] = provider
 
         try:
-            status = provider.probe_folder_status(folder.remote_id)
+            status = provider.probe_folder_status(target.folder_remote_id)
         except Exception as exc:
             log.warning(
                 "patrol probe failed for folder %s of account %s: %s",
-                folder.id,
-                account.id,
+                target.folder_id,
+                target.account_id,
                 safe_error(exc),
             )
-            domain = classify_failure(exc).domain
-            domain_name = getattr(domain, "value", str(domain))
-            # Only transport/auth failures short-circuit the account. A
-            # per-directory error (CONTROL/UNKNOWN) is isolated to this folder.
-            if domain_name in ("transport", "auth"):
-                _mark_account_failure(account, exc, domain=domain)
-            _record_attempt(folder, fps, failed=True)
-            result.failed += 1
+            _persist_failed_attempt(target, exc=exc, domain=classify_failure(exc).domain)
             continue
+
         if status is None:
-            # Unsupported probe or unparseable response: treat as a
-            # failed probe (retried next patrol cycle), never as
-            # "no change".
-            _record_attempt(folder, fps, failed=True)
-            result.failed += 1
+            _persist_failed_attempt(target)
             continue
 
         result.probed += 1
-        _clear_cooldown(account)
-        fps = _record_attempt(folder, fps, failed=False)
-        baseline = (
-            FolderStatus.from_dict(fps.last_status)
-            if fps.last_status is not None
-            else None
-        )
-        baseline_ready = bool(cp.full_scan_complete) if cp is not None else False
         is_changed = (
-            baseline is not None
-            and baseline_ready
-            and bool(changed_dimensions(baseline, status))
+            target.baseline is not None
+            and target.baseline_ready
+            and bool(changed_dimensions(target.baseline, status))
         )
-        fps.last_status = status.to_dict()
-        session.flush()
 
-        if is_changed:
-            # No-baseline folders only record state (AC-012): the delta
-            # pipeline owns convergence, and baseline establishment
-            # stays with account discovery / manual sync.
-            enqueue_job(
+        def _persist_success() -> None:
+            if target.account_id in account_has_cooldown:
+                _db_clear_cooldown(session, target.account_id)
+                account_has_cooldown.discard(target.account_id)
+            _record_attempt(
                 session,
-                job_type=JobType.SYNC_FOLDER_DELTA.value,
-                execution_origin=ExecutionOrigin.BACKGROUND,
-                account_id=account.id,
-                payload={"folder_id": str(folder.id)},
-                priority=75,
-                dedupe_key=f"delta:{account.id}:{folder.id}",
+                target.folder_id,
+                had_fps=target.had_fps,
+                current_time=current_time,
+                failed=False,
+                last_status=status.to_dict(),
             )
-            result.changed += 1
+            if is_changed:
+                # No-baseline folders only record state (AC-012): the delta
+                # pipeline owns convergence, and baseline establishment
+                # stays with account discovery / manual sync.
+                enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_FOLDER_DELTA.value,
+                    execution_origin=ExecutionOrigin.BACKGROUND,
+                    account_id=target.account_id,
+                    payload={"folder_id": str(target.folder_id)},
+                    priority=75,
+                    dedupe_key=f"delta:{target.account_id}:{target.folder_id}",
+                )
+                result.changed += 1
+
+        _run_short_tx(_persist_success)
 
     return result
